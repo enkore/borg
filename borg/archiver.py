@@ -382,6 +382,28 @@ class Archiver:
 
         strip_components = args.strip_components
 
+        import difflib
+        import re
+
+        def diff_chunks(ref, cmp):
+            seq = difflib.SequenceMatcher(autojunk=False)
+            seq.set_seqs([c[0] for c in ref], [c[0] for c in cmp])
+            diff = []
+            for op, i1, i2, j1, j2 in seq.get_opcodes():
+                if op == "replace":
+                    diff.append("±" * (i2 - i1))
+                elif op == "delete":
+                    diff.append("-" * (i2 - i1))
+                elif op == "insert":
+                    diff.append("+" * (j2 - j1))
+                else:
+                    diff.append("=" * (i2 - i1))
+            diff = "".join(diff)
+            if len(diff) > 50:
+                diff = re.sub(r'([=+-±])(\1{4,})\1', lambda match:
+                    "%s%d%s" % (match.group(1), len(match.group(2)),match.group(1)), diff)
+            return (seq.ratio(), diff)
+
         def compare_items(item, compare_item):
             if not stat.S_ISREG(item[b'mode']):
                 # print(remove_surrogates(item[b'path']), "is a directory")
@@ -398,10 +420,14 @@ class Archiver:
                     print("\t", args.compare, remove_surrogates(compare_item.get(b"source", "<regular file>")))
                 return
             if item[b'chunks'] == compare_item[b'chunks']:
-                #print(remove_surrogates(item[b'path']), "same by chunk-compare")
                 return
             elif True:  # TODO CHECK / ASSUME: chunker_params identical for both archives
                 print(remove_surrogates(item[b'path']), "different by chunk-compare")
+                if args.show_chunks:
+                    ratio, diff = diff_chunks(item[b'chunks'], compare_item[b'chunks'])
+                    if len(diff) > 2:
+                        print("\t%.2f" % ratio, "[" + diff + "]")
+
                 return
             # must compare chunk data here
             refhash = hash_item(ref, item)
@@ -410,7 +436,6 @@ class Archiver:
                 print(remove_surrogates(item[b'path']), "different (by hash)")
                 print("\t", args.location.archive, refhash)
                 print("\t", args.compare, comphash)
-
 
         from itertools import zip_longest
 
@@ -1197,6 +1222,9 @@ class Archiver:
                                type=int, default=0, metavar='NUMBER',
                                help='Remove the specified number of leading path elements. Pathnames with fewer '
                                     'elements will be silently skipped.')
+        subparser.add_argument('--chunks', dest='show_chunks',
+                               action='store_true', default=False,
+                               help='Visualize changed chunks.')
         subparser.add_argument('location', metavar='REF',
                                type=location_validator(archive=True),
                                help='reference archive')
