@@ -353,6 +353,67 @@ class Archiver:
                 self.print_warning("Include pattern '%s' never matched.", pattern)
         return self.exit_code
 
+    def do_diff(self, args):
+        """Diff archive contents"""
+        repository = self.open_repository(args)
+        manifest, key = Manifest.load(repository)
+        ref = Archive(repository, key, manifest, args.location.archive)
+        compare = Archive(repository, key, manifest, args.compare)
+
+        matcher = PatternMatcher()
+        if args.excludes:
+            matcher.add(args.excludes, False)
+
+        include_patterns = []
+
+        if args.paths:
+            include_patterns.extend(parse_pattern(i, PathPrefixPattern) for i in args.paths)
+            matcher.add(include_patterns, True)
+
+        matcher.fallback = not include_patterns
+
+        def hash_item(archive, item):
+            import hashlib
+            ids = [c[0] for c in item[b'chunks']]
+            hash = hashlib.sha512()
+            for chunk in archive.pipeline.fetch_many(ids):
+                hash.update(chunk)
+            return hash.hexdigest()
+
+        strip_components = args.strip_components
+        for item in ref.iter_items(lambda item: matcher.match(item[b'path'])):
+            if not stat.S_ISREG(item[b'mode']):
+                print(remove_surrogates(item[b'path']), "is a directory")
+                continue
+            orig_path = item[b'path']
+            if strip_components:
+                item[b'path'] = os.sep.join(orig_path.split(os.sep)[strip_components:])
+                if not item[b'path']:
+                    continue
+            for compare_item in compare.iter_items(lambda item: item[b'path'] == orig_path):
+                break
+            else:
+                print(remove_surrogates(item[b'path']), "not in", args.compare)
+                continue
+            if (0 in [len(item[b'chunks']), len(compare_item[b'chunks'])] and
+                    len(item[b'chunks']) != len(compare_item[b'chunks'])):
+                print(remove_surrogates(item[b'path']), "different (either one truncated)")
+                continue
+            if item[b'chunks'] == compare_item[b'chunks']:
+                print(remove_surrogates(item[b'path']), "same by chunk-compare")
+                continue
+            # must compare chunk data here
+            refhash = hash_item(ref, item)
+            comphash = hash_item(compare, compare_item)
+            if refhash != comphash:
+                print(remove_surrogates(item[b'path']), "different (by hash)")
+                print("\t", args.location.archive, refhash)
+                print("\t", args.compare, comphash)
+        for pattern in include_patterns:
+            if pattern.match_count == 0:
+                self.print_warning("Include pattern '%s' never matched.", pattern)
+        return self.exit_code
+
     def do_rename(self, args):
         """Rename an existing archive"""
         repository = self.open_repository(args, exclusive=True)
@@ -1082,6 +1143,36 @@ class Archiver:
                                help='archive to extract')
         subparser.add_argument('paths', metavar='PATH', nargs='*', type=str,
                                help='paths to extract; patterns are supported')
+
+        diff_epilog = textwrap.dedent("""
+            This command finds differences in file contents (not metadata) between archives.
+
+            See the output of the "borg help patterns" command for more help on exclude patterns.
+            """)
+        subparser = subparsers.add_parser('diff', parents=[common_parser],
+                                          description=self.do_diff.__doc__,
+                                          epilog=diff_epilog,
+                                          formatter_class=argparse.RawDescriptionHelpFormatter,
+                                          help='find differences in archive contents')
+        subparser.set_defaults(func=self.do_diff)
+        subparser.add_argument('-e', '--exclude', dest='excludes',
+                               type=parse_pattern, action='append',
+                               metavar="PATTERN", help='exclude paths matching PATTERN')
+        subparser.add_argument('--exclude-from', dest='exclude_files',
+                               type=argparse.FileType('r'), action='append',
+                               metavar='EXCLUDEFILE', help='read exclude patterns from EXCLUDEFILE, one per line')
+        subparser.add_argument('--strip-components', dest='strip_components',
+                               type=int, default=0, metavar='NUMBER',
+                               help='Remove the specified number of leading path elements. Pathnames with fewer '
+                                    'elements will be silently skipped.')
+        subparser.add_argument('location', metavar='REF',
+                               type=location_validator(archive=True),
+                               help='reference archive')
+        subparser.add_argument('compare', metavar='COMPARE',
+                               type=str,
+                               help='archive to compare to reference')
+        subparser.add_argument('paths', metavar='PATH', nargs='*', type=str,
+                               help='paths to compare; patterns are supported')
 
         rename_epilog = textwrap.dedent("""
         This command renames an archive in the repository.
