@@ -391,20 +391,11 @@ class Archiver:
                 item[b'path'] = os.sep.join(orig_path.split(os.sep)[strip_components:])
                 if not item[b'path']:
                     return
-            if b'chunks' not in item and b'chunks' not in compare_item:
-                if item[b'source'] == compare_item[b'source']:
-                    #print(remove_surrogates(item[b'path']), "same by hard link")
-                    pass
-                else:
-                    print(remove_surrogates(item[b'path']), "different (by hard link)")
-                    print("\t", args.location.archive, remove_surrogates(item[b'source']))
-                    print("\t", args.compare, remove_surrogates(compare_item[b'source']))
-                return
-            if b'chunks' not in item and b'chunks' in compare_item:
-                print(remove_surrogates(item[b'path']), "different (ref: hardlink, compare: file)")
-                return
-            if b'chunks' not in compare_item and b'chunks' in item:
-                print(remove_surrogates(item[b'path']), "different (ref: file, compare: hard link)")
+            if b'chunks' not in item or b'chunks' not in compare_item:
+                if item.get(b"source", None) != compare_item.get(b"source", None):
+                    print(remove_surrogates(item[b'path']), "different (by link)")
+                    print("\t", args.location.archive, remove_surrogates(item.get(b"source", "<regular file>")))
+                    print("\t", args.compare, remove_surrogates(compare_item.get(b"source", "<regular file>")))
                 return
             if item[b'chunks'] == compare_item[b'chunks']:
                 #print(remove_surrogates(item[b'path']), "same by chunk-compare")
