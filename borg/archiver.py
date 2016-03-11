@@ -381,46 +381,37 @@ class Archiver:
             return hash.hexdigest()
 
         strip_components = args.strip_components
-#        from itertools import zip_longest
-#
-#        for refitem, cmpitem in zip_longest(
-#            ref.iter_items(lambda item: matcher.match(item[b'path'])),
-#            compare.iter_items(lambda item: matcher.match(item[b'path'])),
-#        )
-        for item in ref.iter_items(lambda item: matcher.match(item[b'path'])):
+
+        def compare_items(item, compare_item):
             if not stat.S_ISREG(item[b'mode']):
-                #print(remove_surrogates(item[b'path']), "is a directory")
-                continue
+                # print(remove_surrogates(item[b'path']), "is a directory")
+                return
             orig_path = item[b'path']
             if strip_components:
                 item[b'path'] = os.sep.join(orig_path.split(os.sep)[strip_components:])
                 if not item[b'path']:
-                    continue
-            for compare_item in compare.iter_items(lambda item: item[b'path'] == orig_path):
-                break
-            else:
-                print(remove_surrogates(item[b'path']), "not in", args.compare)
-                continue
+                    return
             if b'chunks' not in item and b'chunks' not in compare_item:
                 if item[b'source'] == compare_item[b'source']:
-                    print(remove_surrogates(item[b'path']), "same by hard link")
+                    #print(remove_surrogates(item[b'path']), "same by hard link")
+                    pass
                 else:
                     print(remove_surrogates(item[b'path']), "different (by hard link)")
                     print("\t", args.location.archive, remove_surrogates(item[b'source']))
                     print("\t", args.compare, remove_surrogates(compare_item[b'source']))
-                continue
+                return
             if b'chunks' not in item and b'chunks' in compare_item:
                 print(remove_surrogates(item[b'path']), "different (ref: hardlink, compare: file)")
-                continue
+                return
             if b'chunks' not in compare_item and b'chunks' in item:
                 print(remove_surrogates(item[b'path']), "different (ref: file, compare: hard link)")
-                continue
+                return
             if item[b'chunks'] == compare_item[b'chunks']:
-                print(remove_surrogates(item[b'path']), "same by chunk-compare")
-                continue
-            elif True:  # CHECK / ASSUME: chunker_params identical for both archives
+                #print(remove_surrogates(item[b'path']), "same by chunk-compare")
+                return
+            elif True:  # TODO CHECK / ASSUME: chunker_params identical for both archives
                 print(remove_surrogates(item[b'path']), "different by chunk-compare")
-                #continue
+                return
             # must compare chunk data here
             refhash = hash_item(ref, item)
             comphash = hash_item(compare, compare_item)
@@ -428,6 +419,37 @@ class Archiver:
                 print(remove_surrogates(item[b'path']), "different (by hash)")
                 print("\t", args.location.archive, refhash)
                 print("\t", args.compare, comphash)
+
+
+        from itertools import zip_longest
+
+        orphan_refs = {}
+        orphan_cmps = {}
+        for refitem, cmpitem in zip_longest(
+            ref.iter_items(lambda item: matcher.match(item[b'path'])),
+            compare.iter_items(lambda item: matcher.match(item[b'path'])),
+        ):
+            if refitem and cmpitem and refitem[b'path'] == cmpitem[b'path']:
+                compare_items(refitem, cmpitem)
+                continue
+            if refitem:
+                refitem_morphan = orphan_cmps.pop(refitem[b'path'], None)
+                if refitem_morphan:
+                    compare_items(refitem,  refitem_morphan)
+                else:
+                    orphan_refs[refitem[b'path']] = refitem
+            if cmpitem:
+                cmpitem_morphan = orphan_refs.pop(cmpitem[b'path'], None)
+                if cmpitem_morphan:
+                    compare_items(cmpitem_morphan, cmpitem)
+                else:
+                    orphan_cmps[cmpitem[b'path']] = cmpitem
+
+        for added in orphan_cmps.keys():
+            print(remove_surrogates(added), "added in compare")
+        for deleted in orphan_refs.keys():
+            print(remove_surrogates(deleted), "deleted in compare")
+
         for pattern in include_patterns:
             if pattern.match_count == 0:
                 self.print_warning("Include pattern '%s' never matched.", pattern)
