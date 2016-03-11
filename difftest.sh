@@ -19,6 +19,7 @@ echo "malicious code" >> $D/file3
 borg create $T::arch2 $D
 
 truncate -s 0 $D/file1
+rm $D/file3
 
 borg create $T::arch3 $D
 

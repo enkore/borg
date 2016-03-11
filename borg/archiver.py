@@ -381,9 +381,15 @@ class Archiver:
             return hash.hexdigest()
 
         strip_components = args.strip_components
+#        from itertools import zip_longest
+#
+#        for refitem, cmpitem in zip_longest(
+#            ref.iter_items(lambda item: matcher.match(item[b'path'])),
+#            compare.iter_items(lambda item: matcher.match(item[b'path'])),
+#        )
         for item in ref.iter_items(lambda item: matcher.match(item[b'path'])):
             if not stat.S_ISREG(item[b'mode']):
-                print(remove_surrogates(item[b'path']), "is a directory")
+                #print(remove_surrogates(item[b'path']), "is a directory")
                 continue
             orig_path = item[b'path']
             if strip_components:
@@ -395,13 +401,26 @@ class Archiver:
             else:
                 print(remove_surrogates(item[b'path']), "not in", args.compare)
                 continue
-            if (0 in [len(item[b'chunks']), len(compare_item[b'chunks'])] and
-                    len(item[b'chunks']) != len(compare_item[b'chunks'])):
-                print(remove_surrogates(item[b'path']), "different (either one truncated)")
+            if b'chunks' not in item and b'chunks' not in compare_item:
+                if item[b'source'] == compare_item[b'source']:
+                    print(remove_surrogates(item[b'path']), "same by hard link")
+                else:
+                    print(remove_surrogates(item[b'path']), "different (by hard link)")
+                    print("\t", args.location.archive, remove_surrogates(item[b'source']))
+                    print("\t", args.compare, remove_surrogates(compare_item[b'source']))
+                continue
+            if b'chunks' not in item and b'chunks' in compare_item:
+                print(remove_surrogates(item[b'path']), "different (ref: hardlink, compare: file)")
+                continue
+            if b'chunks' not in compare_item and b'chunks' in item:
+                print(remove_surrogates(item[b'path']), "different (ref: file, compare: hard link)")
                 continue
             if item[b'chunks'] == compare_item[b'chunks']:
                 print(remove_surrogates(item[b'path']), "same by chunk-compare")
                 continue
+            elif True:  # CHECK / ASSUME: chunker_params identical for both archives
+                print(remove_surrogates(item[b'path']), "different by chunk-compare")
+                #continue
             # must compare chunk data here
             refhash = hash_item(ref, item)
             comphash = hash_item(compare, compare_item)
