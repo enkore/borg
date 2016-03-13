@@ -1494,5 +1494,9 @@ def main():  # pragma: no cover
     sys.exit(exit_code)
 
 
+def main_mount():  # pragma: no cover
+    sys.argv.insert(1, "mount")
+    main()
+
 if __name__ == '__main__':
     main()

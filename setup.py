@@ -262,6 +262,7 @@ setup(
     entry_points={
         'console_scripts': [
             'borg = borg.archiver:main',
+            'mount.borg = borg.archiver:main_mount',
         ]
     },
     cmdclass=cmdclass,
