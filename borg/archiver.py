@@ -2,6 +2,7 @@ from binascii import hexlify, unhexlify
 from datetime import datetime
 from itertools import zip_longest
 from operator import attrgetter
+from queue import Queue, Empty
 import argparse
 import functools
 import hashlib
@@ -13,6 +14,7 @@ import signal
 import stat
 import sys
 import textwrap
+import threading
 import traceback
 
 from . import __version__
@@ -21,12 +23,12 @@ from .helpers import Error, location_validator, archivename_validator, format_ti
     get_cache_dir, prune_within, prune_split, \
     Manifest, remove_surrogates, update_excludes, format_archive, check_extension_modules, Statistics, \
     dir_is_tagged, ChunkerParams, CompressionSpec, is_slow_msgpack, yes, sysinfo, \
-    EXIT_SUCCESS, EXIT_WARNING, EXIT_ERROR, log_multi, PatternMatcher, ItemFormatter
+    EXIT_SUCCESS, EXIT_WARNING, EXIT_ERROR, log_multi, PatternMatcher, ItemFormatter, ProgressIndicatorPercent
 from .logger import create_logger, setup_logging
 logger = create_logger()
 from .compress import Compressor, COMPR_BUFFER
 from .upgrader import AtticRepositoryUpgrader, BorgRepositoryUpgrader
-from .repository import Repository
+from .repository import Repository, TAG_PUT
 from .cache import Cache
 from .key import key_creator, RepoKey, PassphraseKey
 from .archive import Archive, ArchiveChecker, CHUNKER_PARAMS
@@ -142,6 +144,7 @@ class Archiver:
     def do_check(self, args):
         """Check repository consistency"""
         repository = self.open_repository(args, exclusive=args.repair)
+        manifest, key = Manifest.load(repository)
         if args.repair:
             msg = ("'check --repair' is an experimental feature that might result in data loss." +
                    "\n" +
@@ -150,7 +153,7 @@ class Archiver:
                        env_var_override='BORG_CHECK_I_KNOW_WHAT_I_AM_DOING'):
                 return EXIT_ERROR
         if not args.archives_only:
-            if not repository.check(repair=args.repair, save_space=args.save_space):
+            if not repository.check(key, repair=args.repair, save_space=args.save_space):
                 return EXIT_WARNING
         if not args.repo_only and not ArchiveChecker().check(
                 repository, repair=args.repair, archive=args.location.archive,
@@ -719,6 +722,204 @@ class Archiver:
             print("warning: %s" % e)
         return self.exit_code
 
+    def do_recompress(self, args):
+        """Recompress data"""
+        class Stats:
+            old_size = new_size = 0
+            chunks_seen = chunks_recompressed = chunks_skipped = 0
+
+            def __str__(self):
+                if self.old_size:
+                    ratio = self.new_size / self.old_size * 100
+                else:
+                    ratio = 0
+                return textwrap.dedent("""
+                Chunks seen, recompressed, skipped: {0.chunks_seen}, {0.chunks_recompressed}, {0.chunks_skipped}
+                Old size: {old_size}
+                New size: {new_size}
+                Ratio: {ratio:.0f} %""").format(self,
+                                              old_size=format_file_size(self.old_size),
+                                              new_size=format_file_size(self.new_size),
+                                              ratio=ratio).strip()
+
+            def seen(self, chunk):
+                self.chunks_seen += 1
+                self.old_size += len(chunk)
+
+            def skipped(self, chunk):
+                self.chunks_skipped += 1
+                self.new_size += len(chunk)
+
+            def recompressed(self, chunk):
+                self.chunks_recompressed += 1
+                self.new_size += len(chunk)
+
+        def do_exit_soon(sig_num, stack_frame):
+            nonlocal exit_soon
+            if exit_soon:
+                print('Received signal, again. I\'m not deaf.', file=sys.stderr)
+            else:
+                print('Received signal, will exit cleanly.\n', file=sys.stderr)
+            exit_soon = True
+
+        signal.signal(signal.SIGTERM, do_exit_soon)
+        signal.signal(signal.SIGINT, do_exit_soon)
+
+        class Mt:
+            def __init__(self):
+                self.inq = Queue()
+                self.outq = Queue()
+                self.threads = []
+                if args.compression['name'] in ['lz4', 'none'] and args.cores:
+                    logger.info('Disabling multithreading due to %s compression', args.compression['name'])
+                    args.cores = 0
+                self.qtresh = args.cores * 4
+                for i in range(args.cores):
+                    thread = threading.Thread(target=self._thread, name="compress-thread-%d" % i)
+                    thread.start()
+                    self.threads.append(thread)
+                self.last_segment_id = repository.io.get_latest_segment()
+
+            def _pull_chunk(self):
+                try:
+                    id_, data = self.outq.get_nowait()
+                except Empty:
+                    return False
+                if id_ is None:
+                    stats.skipped(data)
+                    return True
+                stats.recompressed(data)
+                if not dry_run:
+                    repository.put(id_, data)
+                return True
+
+            def _thread(self):
+                compr_args = dict(buffer=bytes(COMPR_BUFFER))
+                compr_args.update(args.compression)
+                compressor = Compressor(**compr_args)
+                force_recompress = args.force_recompress
+                while True:
+                    item = self.inq.get()
+                    if item is None:
+                        break
+                    id_, data = item
+                    decrypted_data = key.decrypt(id_, data, decompress=False)
+                    data_compressor = Compressor.detect(decrypted_data)
+                    if not force_recompress and isinstance(key.compressor.compressor, data_compressor):
+                        self.outq.put((None, data))
+                        self.inq.task_done()
+                        continue
+                    # this probably generates duplicate CTR values, depending on how exactly the generated code
+                    # looks like and what exactly EVP does.
+                    # IOW this is totally unsafe.
+                    self.outq.put((id_, key.encrypt(compressor.decompress(decrypted_data))))
+
+            def push_chunk(self, id_, data):
+                self.inq.put((id_, data))
+
+            def pull_excess(self):
+                while self.outq.qsize() > self.qtresh:
+                    if not self._pull_chunk():
+                        break
+                self.check_commit()
+
+            def clear_queues(self):
+                while ((stats.chunks_skipped + stats.chunks_recompressed) < stats.chunks_seen or
+                           any(t.is_alive() for t in self.threads)):
+                    self.inq.put(None)
+                    if not self._pull_chunk():
+                        continue
+                    self.check_commit()
+
+            def join(self):
+                for thread in self.threads:
+                    thread.join()
+
+            def check_commit(self):
+                if not dry_run and repository.io.get_latest_segment() > self.last_segment_id + 10:
+                    repository.commit()
+                    self.last_segment_id = repository.io.get_latest_segment()
+                    logger.debug('commit at %d', self.last_segment_id)
+
+        dry_run = args.dry_run
+        repository = self.open_repository(args, exclusive=True)
+        manifest, key = Manifest.load(repository)
+        segment_pointer = 0
+        if args.segment_pointer:
+            if args.force_recompress:
+                repository.config.remove_option('repository', 'recompress_segment_pointer')
+            else:
+                segment_pointer = repository.config.getint('repository', 'recompress_segment_pointer', fallback=0)
+        compr_args = dict(buffer=COMPR_BUFFER)
+        compr_args.update(args.compression)
+        key.compressor = Compressor(**compr_args)
+
+        stats = Stats()
+        exit_soon = False
+
+        segments = list(repository.io.segment_iterator())
+        progress_indicator = ProgressIndicatorPercent(len(segments), start=0, step=0.01, same_line=True,
+                                                      msg="%3.2f %% processed")
+
+        mt = Mt()
+
+        if not repository.io.is_committed_segment(segments[-1][1]):
+            self.print_error('Last segment in repository is uncomitted. Repository corrupted. Try '
+                             '"borg check --repair".')
+            repository.close()
+            return self.exit_code
+        for i, (segment_id, segment_filename) in enumerate(segments):
+            if segment_id <= segment_pointer:
+                if args.progress:
+                    progress_indicator.show(i)
+                continue
+            for tag, id_, offset, data in repository.io.iter_objects(segment_id, True):
+                if tag != TAG_PUT or id_ == Manifest.MANIFEST_ID or id_ not in repository:
+                    continue
+                stats.seen(data)
+                if args.cores > 0:
+                    mt.push_chunk(id_, data)
+                else:
+                    decrypted_data = key.decrypt(id_, data, decompress=False)
+                    compressor = Compressor.detect(decrypted_data)
+                    if not args.force_recompress and isinstance(key.compressor.compressor, compressor):
+                        stats.skipped(data)
+                        continue
+                    encrypted = key.encrypt(key.compressor.decompress(decrypted_data))
+                    stats.recompressed(encrypted)
+                    if not dry_run:
+                        repository.put(id_, encrypted)
+            mt.pull_excess()
+            if exit_soon:
+                break
+            if args.progress:
+                progress_indicator.show(i)
+        if args.progress:
+            progress_indicator.finish()
+        logger.debug("Segments read, clearing queues")
+        mt.clear_queues()
+        logger.debug("Done, joining threads")
+        mt.join()
+        if not dry_run:
+            manifest.write()
+            repository.commit()
+            if args.segment_pointer:
+                if not exit_soon:
+                    segment_id = repository.io.get_latest_segment()
+                repository.config.set('repository', 'recompress_segment_pointer', str(segment_id))
+                repository.save_config(repository.path, repository.config)
+        if args.stats:
+            log_multi(
+                "Repositoy: " + repository.path,
+                "Old segment count: %d" % len(segments),
+                "New segment count: %d" % sum(1 for _ in repository.io.segment_iterator())
+            )
+            if exit_soon or segment_pointer:
+                logger.info("Note: size and chunk information is incomplete")
+            logger.info(stats)
+        repository.close()
+        return self.exit_code
+
     def do_debug_dump_archive_items(self, args):
         """dump (decrypted, decompressed) archive items metadata (not: data)"""
         repository = self.open_repository(args)
@@ -932,8 +1133,8 @@ class Archiver:
                                    help='show/log the return code (rc)')
         common_parser.add_argument('--no-files-cache', dest='cache_files', action='store_false',
                                    help='do not load/update the file metadata cache used to detect unchanged files')
-        common_parser.add_argument('--umask', dest='umask', type=lambda s: int(s, 8), default=UMASK_DEFAULT, metavar='M',
-                                   help='set umask to M (local and remote, default: %(default)04o)')
+        common_parser.add_argument('--umask', dest='umask', type=lambda s: int(s, 8), default=UMASK_DEFAULT,
+                                   metavar='M', help='set umask to M (local and remote, default: %(default)04o)')
         common_parser.add_argument('--remote-path', dest='remote_path', default='borg', metavar='PATH',
                                    help='set remote path to executable (default: "%(default)s")')
 
@@ -1113,7 +1314,8 @@ class Archiver:
                                metavar='EXCLUDEFILE', help='read exclude patterns from EXCLUDEFILE, one per line')
         subparser.add_argument('--exclude-caches', dest='exclude_caches',
                                action='store_true', default=False,
-                               help='exclude directories that contain a CACHEDIR.TAG file (http://www.brynosaurus.com/cachedir/spec.html)')
+                               help='exclude directories that contain a CACHEDIR.TAG file '
+                                    '(http://www.brynosaurus.com/cachedir/spec.html)')
         subparser.add_argument('--exclude-if-present', dest='exclude_if_present',
                                metavar='FILENAME', action='append', type=str,
                                help='exclude directories that contain the specified file')
@@ -1193,7 +1395,8 @@ class Archiver:
                                help='only obey numeric user and group identifiers')
         subparser.add_argument('--strip-components', dest='strip_components',
                                type=int, default=0, metavar='NUMBER',
-                               help='Remove the specified number of leading path elements. Pathnames with fewer elements will be silently skipped.')
+                               help='Remove the specified number of leading path elements. Pathnames with fewer '
+                                    'elements will be silently skipped.')
         subparser.add_argument('--stdout', dest='stdout',
                                action='store_true', default=False,
                                help='write all extracted data to stdout')
@@ -1501,6 +1704,62 @@ class Archiver:
         subparser.add_argument('location', metavar='REPOSITORY', nargs='?', default='',
                                type=location_validator(archive=False),
                                help='path to the repository to be upgraded')
+
+        recompress_epilog = textwrap.dedent("""
+        Recompress data in a repository.
+
+        This is SIGINT / SIGTERM safe and will exit cleanly for
+        both signals after a short time.
+
+        The --segment-pointer option stores the last recompressed
+        segment in the repository. If enabled recompress will resume
+        very quickly even for large archives.
+
+        Using both --segment-pointer and --force will reset it.
+
+        Due to the way Borg currently stores information about compressed chunk size,
+        these cannot be updated. After running recompress information about compressed size of
+        files and archives will be wrong. Other than that this has no influence.
+        """)
+        subparser = subparsers.add_parser('recompress', parents=[common_parser],
+                                          description=self.do_recompress.__doc__,
+                                          epilog=recompress_epilog,
+                                          formatter_class=argparse.RawDescriptionHelpFormatter,
+                                          help='create backup')
+        subparser.set_defaults(func=self.do_recompress)
+        subparser.add_argument('-f', '--force', dest='force_recompress',
+                               action='store_true', default=False,
+                               help='even recompress chunks already compressed with the algorithm set with '
+                                    '--compression')
+        subparser.add_argument('-s', '--stats', dest='stats',
+                               action='store_true', default=False,
+                               help='print statistics at end')
+        subparser.add_argument('-p', '--progress', dest='progress',
+                               action='store_true', default=False,
+                               help='show progress, one dot is printed for each processed chunk')
+        subparser.add_argument('-C', '--compression', dest='compression',
+                               type=CompressionSpec, default=dict(name='none'), metavar='COMPRESSION',
+                               help='select compression algorithm (and level): '
+                                    'none == no compression (default), '
+                                    'lz4 == lz4, '
+                                    'zlib == zlib (default level 6), '
+                                    'zlib,0 .. zlib,9 == zlib (with level 0..9), '
+                                    'lzma == lzma (default level 6), '
+                                    'lzma,0 .. lzma,9 == lzma (with level 0..9).')
+        from multiprocessing import cpu_count
+        subparser.add_argument('--cores', dest='cores',
+                               action='store', default=cpu_count() - 1, type=int,
+                               help='number of extra CPU cores to use for compression (default: %d)' %
+                                    (cpu_count() - 1))
+        subparser.add_argument('-n', '--dry-run', dest='dry_run',
+                               action='store_true', default=False,
+                               help='do not write any data')
+        subparser.add_argument('--segment-pointer', dest='segment_pointer',
+                               action='store_true', default=False,
+                               help='use segment pointer in repository to continue interrupted recompress')
+        subparser.add_argument('location', metavar='REPOSITORY',
+                               type=location_validator(),
+                               help='repository to recompress')
 
         subparser = subparsers.add_parser('help', parents=[common_parser],
                                           description='Extra help')
