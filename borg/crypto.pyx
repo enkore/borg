@@ -3,8 +3,16 @@
 This could be replaced by PyCrypto maybe?
 """
 from libc.stdlib cimport malloc, free
+from cpython.buffer cimport PyBUF_SIMPLE, PyObject_GetBuffer, PyBuffer_Release
 
 API_VERSION = 2
+
+
+cdef Py_buffer ro_buffer(object data) except *:
+    cdef Py_buffer view
+    PyObject_GetBuffer(data, &view, PyBUF_SIMPLE)
+    return view
+
 
 cdef extern from "openssl/rand.h":
     int  RAND_bytes(unsigned char *buf, int num)
@@ -35,6 +43,14 @@ cdef extern from "openssl/evp.h":
     int EVP_EncryptFinal_ex(EVP_CIPHER_CTX *ctx, unsigned char *out, int *outl)
     int EVP_DecryptFinal_ex(EVP_CIPHER_CTX *ctx, unsigned char *out, int *outl)
 
+    EVP_MD *EVP_sha256() nogil
+
+
+cdef extern from "openssl/hmac.h":
+    unsigned char *HMAC(const EVP_MD *evp_md,
+                    const void *key, int key_len,
+                    const unsigned char *data, int data_len,
+                    unsigned char *md, unsigned int *md_len) nogil
 
 import struct
 
@@ -95,6 +111,7 @@ cdef class AES:
         return self.ctx.iv[:16]
 
     def encrypt(self, data):
+        cdef Py_buffer data_buf = ro_buffer(data)
         cdef int inl = len(data)
         cdef int ctl = 0
         cdef int outl = 0
@@ -103,7 +120,7 @@ cdef class AES:
         if not out:
             raise MemoryError
         try:
-            if not EVP_EncryptUpdate(&self.ctx, out, &outl, data, inl):
+            if not EVP_EncryptUpdate(&self.ctx, out, &outl, <const unsigned char*> data_buf.buf, inl):
                 raise Exception('EVP_EncryptUpdate failed')
             ctl = outl
             if not EVP_EncryptFinal_ex(&self.ctx, out+ctl, &outl):
@@ -112,8 +129,10 @@ cdef class AES:
             return out[:ctl]
         finally:
             free(out)
+            PyBuffer_Release(&data_buf)
 
     def decrypt(self, data):
+        cdef Py_buffer data_buf = ro_buffer(data)
         cdef int inl = len(data)
         cdef int ptl = 0
         cdef int outl = 0
@@ -124,7 +143,7 @@ cdef class AES:
         if not out:
             raise MemoryError
         try:
-            if not EVP_DecryptUpdate(&self.ctx, out, &outl, data, inl):
+            if not EVP_DecryptUpdate(&self.ctx, out, &outl, <const unsigned char*> data_buf.buf, inl):
                 raise Exception('EVP_DecryptUpdate failed')
             ptl = outl
             if EVP_DecryptFinal_ex(&self.ctx, out+ptl, &outl) <= 0:
@@ -136,3 +155,22 @@ cdef class AES:
             return out[:ptl]
         finally:
             free(out)
+            PyBuffer_Release(&data_buf)
+
+
+def hmac_sha256(key_,  data):
+    md_ = bytearray(32)
+    cdef Py_buffer data_buf = ro_buffer(data)
+    cdef int data_len = len(data)
+    cdef int key_len = len(key_)
+    cdef unsigned char *md = md_
+    cdef unsigned char *key = key_
+    try:
+        with nogil:
+            rc = HMAC(EVP_sha256(), <const unsigned char*> key, key_len,
+                      <const unsigned char*> data_buf.buf, data_len, md, NULL)
+        if not rc:
+            raise Exception('HMAC(EVP_sha256) failed')
+    finally:
+        PyBuffer_Release(&data_buf)
+    return md_
