@@ -174,6 +174,10 @@ chunker_fill(Chunker *c)
             return 0;
         }
         n = PyBytes_Size(data);
+        if(PyErr_Occurred()) {
+            // we wanted bytes(), but got something else
+            return 0;
+        }
         if(n) {
             memcpy(c->data + c->position + c->remaining, PyBytes_AsString(data), n);
             c->remaining += n;
@@ -205,7 +209,7 @@ chunker_process(Chunker *c)
             return NULL;
         }
     }
-    if(c->remaining < window_size) {
+    if(c->eof) {
         c->done = 1;
         if(c->remaining) {
             c->bytes_yielded += c->remaining;
