@@ -1308,29 +1308,28 @@ class ArchiverTestCase(ArchiverTestCaseBase):
                         self.tearDown()
         self.setUp()
 
-    def _test_rewrite_chunker_interrupt_patch(self, n_chunks):
+    def _test_rewrite_chunker_interrupt_patch(self):
         real_add_chunk = Cache.add_chunk
 
         def add_chunk(*args, **kwargs):
-            nonlocal n_chunks
-            if n_chunks <= 0:
-                frame = inspect.stack()[2]
-                try:
-                    caller_self = frame[0].f_locals['self']
-                    if caller_self.__class__ is ArchiveRewriter:
-                        caller_self.interrupt = True
-                finally:
-                    del frame
-            n_chunks -= 1
+            frame = inspect.stack()[2]
+            try:
+                caller_self = frame[0].f_locals['self']
+                caller_self.interrupt = True
+            finally:
+                del frame
             return real_add_chunk(*args, **kwargs)
         return add_chunk
 
     def test_rewrite_rechunkify_interrupt(self):
-        self.create_test_files()
+        self.create_regular_file('empty', size=0)
+        self.create_regular_file('file1', size=1024 * 80)
+        os.link(os.path.join(self.input_path, 'file1'),
+                os.path.join(self.input_path, 'hardlink'))
         self.cmd('init', self.repository_location)
         self.cmd('create', self.repository_location + '::test', 'input')
         archive_before = self.cmd('list', self.repository_location + '::test', '--format', '{sha512}')
-        with patch.object(Cache, 'add_chunk', self._test_rewrite_chunker_interrupt_patch(1)):
+        with patch.object(Cache, 'add_chunk', self._test_rewrite_chunker_interrupt_patch()):
             self.cmd('rewrite', '-p', '--chunker-params', '16,18,17,4095', self.repository_location)
         assert 'test.rewrite' in self.cmd('list', self.repository_location)
         output = self.cmd('rewrite', '-svp', '--debug', '--chunker-params', '16,18,17,4095', self.repository_location)
