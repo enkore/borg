@@ -10,7 +10,6 @@ borg rewrite
                         [-e PATTERN] [--exclude-from EXCLUDEFILE]
                         [--exclude-caches] [--exclude-if-present FILENAME]
                         [--keep-tag-files] [-C COMPRESSION]
-                        [--timestamp yyyy-mm-ddThh:mm:ss]
                         [--chunker-params CHUNK_MIN_EXP,CHUNK_MAX_EXP,HASH_MASK_BITS,HASH_WINDOW_SIZE]
                         [REPOSITORY_OR_ARCHIVE] [PATH [PATH ...]]
     
@@ -55,9 +54,6 @@ borg rewrite
                             (default level 6), zlib,0 .. zlib,9 == zlib (with
                             level 0..9), lzma == lzma (default level 6), lzma,0 ..
                             lzma,9 == lzma (with level 0..9).
-      --timestamp yyyy-mm-ddThh:mm:ss
-                            manually specify the archive creation date/time (UTC).
-                            alternatively, give a reference file/directory.
       --chunker-params CHUNK_MIN_EXP,CHUNK_MAX_EXP,HASH_MASK_BITS,HASH_WINDOW_SIZE
                             specify the chunker parameters (or "default").
     
