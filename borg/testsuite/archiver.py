@@ -2,6 +2,7 @@ from binascii import hexlify
 from configparser import ConfigParser
 import errno
 import os
+import inspect
 from io import StringIO
 import random
 import stat
@@ -17,7 +18,7 @@ from hashlib import sha256
 import pytest
 
 from .. import xattr
-from ..archive import Archive, ChunkBuffer, CHUNK_MAX_EXP
+from ..archive import Archive, ChunkBuffer, ArchiveRewriter, CHUNK_MAX_EXP
 from ..archiver import Archiver
 from ..cache import Cache
 from ..crypto import bytes_to_long, num_aes_blocks
@@ -233,9 +234,6 @@ class ArchiverTestCaseBase(BaseTestCase):
     def create_src_archive(self, name):
         self.cmd('create', self.repository_location + '::' + name, src_dir)
 
-
-class ArchiverTestCase(ArchiverTestCaseBase):
-
     def create_regular_file(self, name, size=0, contents=None):
         filename = os.path.join(self.input_path, name)
         if not os.path.exists(os.path.dirname(filename)):
@@ -274,7 +272,8 @@ class ArchiverTestCase(ArchiverTestCaseBase):
             # same for newer ubuntu and centos.
             # if this is supported just on specific platform, platform should be checked first,
             # so that the test setup for all tests using it does not fail here always for others.
-            # xattr.setxattr(os.path.join(self.input_path, 'link1'), 'user.foo_symlink', b'bar_symlink', follow_symlinks=False)
+            # xattr.setxattr(os.path.join(self.input_path, 'link1'), 'user.foo_symlink', b'bar_symlink',
+            # follow_symlinks=False)
         # FIFO node
         os.mkfifo(os.path.join(self.input_path, 'fifo1'))
         if has_lchflags:
@@ -293,6 +292,8 @@ class ArchiverTestCase(ArchiverTestCaseBase):
             have_root = False
         return have_root
 
+
+class ArchiverTestCase(ArchiverTestCaseBase):
     def test_basic_functionality(self):
         have_root = self.create_test_files()
         self.cmd('init', self.repository_location)
@@ -635,29 +636,56 @@ class ArchiverTestCase(ArchiverTestCaseBase):
             self.cmd("extract", self.repository_location + "::test", "fm:input/file1", "fm:*file33*", "input/file2")
         self.assert_equal(sorted(os.listdir("output/input")), ["file1", "file2", "file333"])
 
-    def test_exclude_caches(self):
+    def _create_test_caches(self):
         self.cmd('init', self.repository_location)
         self.create_regular_file('file1', size=1024 * 80)
         self.create_regular_file('cache1/CACHEDIR.TAG', contents=b'Signature: 8a477f597d28d172789f06886806bc55 extra stuff')
         self.create_regular_file('cache2/CACHEDIR.TAG', contents=b'invalid signature')
-        self.cmd('create', '--exclude-caches', self.repository_location + '::test', 'input')
+        os.mkdir('input/cache3')
+        os.link('input/cache1/CACHEDIR.TAG', 'input/cache3/CACHEDIR.TAG')
+
+    def _assert_test_caches(self):
         with changedir('output'):
             self.cmd('extract', self.repository_location + '::test')
         self.assert_equal(sorted(os.listdir('output/input')), ['cache2', 'file1'])
         self.assert_equal(sorted(os.listdir('output/input/cache2')), ['CACHEDIR.TAG'])
 
-    def test_exclude_tagged(self):
+    def test_exclude_caches(self):
+        self._create_test_caches()
+        self.cmd('create', '--exclude-caches', self.repository_location + '::test', 'input')
+        self._assert_test_caches()
+
+    def test_rewrite_exclude_caches(self):
+        self._create_test_caches()
+        self.cmd('create', self.repository_location + '::test', 'input')
+        self.cmd('rewrite', '--exclude-caches', self.repository_location + '::test')
+        self._assert_test_caches()
+
+    def _create_test_tagged(self):
         self.cmd('init', self.repository_location)
         self.create_regular_file('file1', size=1024 * 80)
         self.create_regular_file('tagged1/.NOBACKUP')
         self.create_regular_file('tagged2/00-NOBACKUP')
         self.create_regular_file('tagged3/.NOBACKUP/file2')
-        self.cmd('create', '--exclude-if-present', '.NOBACKUP', '--exclude-if-present', '00-NOBACKUP', self.repository_location + '::test', 'input')
+
+    def _assert_test_tagged(self):
         with changedir('output'):
             self.cmd('extract', self.repository_location + '::test')
         self.assert_equal(sorted(os.listdir('output/input')), ['file1', 'tagged3'])
 
-    def test_exclude_keep_tagged(self):
+    def test_exclude_tagged(self):
+        self._create_test_tagged()
+        self.cmd('create', '--exclude-if-present', '.NOBACKUP', '--exclude-if-present', '00-NOBACKUP', self.repository_location + '::test', 'input')
+        self._assert_test_tagged()
+
+    def test_rewrite_exclude_tagged(self):
+        self._create_test_tagged()
+        self.cmd('create', self.repository_location + '::test', 'input')
+        self.cmd('rewrite', '--exclude-if-present', '.NOBACKUP', '--exclude-if-present', '00-NOBACKUP',
+                 self.repository_location + '::test')
+        self._assert_test_tagged()
+
+    def _create_test_keep_tagged(self):
         self.cmd('init', self.repository_location)
         self.create_regular_file('file0', size=1024)
         self.create_regular_file('tagged1/.NOBACKUP1')
@@ -670,8 +698,8 @@ class ArchiverTestCase(ArchiverTestCaseBase):
         self.create_regular_file('taggedall/.NOBACKUP2')
         self.create_regular_file('taggedall/CACHEDIR.TAG', contents=b'Signature: 8a477f597d28d172789f06886806bc55 extra stuff')
         self.create_regular_file('taggedall/file4', size=1024)
-        self.cmd('create', '--exclude-if-present', '.NOBACKUP1', '--exclude-if-present', '.NOBACKUP2',
-                 '--exclude-caches', '--keep-tag-files', self.repository_location + '::test', 'input')
+
+    def _assert_test_keep_tagged(self):
         with changedir('output'):
             self.cmd('extract', self.repository_location + '::test')
         self.assert_equal(sorted(os.listdir('output/input')), ['file0', 'tagged1', 'tagged2', 'tagged3', 'taggedall'])
@@ -680,6 +708,19 @@ class ArchiverTestCase(ArchiverTestCaseBase):
         self.assert_equal(os.listdir('output/input/tagged3'), ['CACHEDIR.TAG'])
         self.assert_equal(sorted(os.listdir('output/input/taggedall')),
                           ['.NOBACKUP1', '.NOBACKUP2', 'CACHEDIR.TAG', ])
+
+    def test_exclude_keep_tagged(self):
+        self._create_test_keep_tagged()
+        self.cmd('create', '--exclude-if-present', '.NOBACKUP1', '--exclude-if-present', '.NOBACKUP2',
+                 '--exclude-caches', '--keep-tag-files', self.repository_location + '::test', 'input')
+        self._assert_test_keep_tagged()
+
+    def test_rewrite_exclude_keep_tagged(self):
+        self._create_test_keep_tagged()
+        self.cmd('create', self.repository_location + '::test', 'input')
+        self.cmd('rewrite', '--exclude-if-present', '.NOBACKUP1', '--exclude-if-present', '.NOBACKUP2',
+                 '--exclude-caches', '--keep-tag-files', self.repository_location + '::test')
+        self._assert_test_keep_tagged()
 
     def test_path_normalization(self):
         self.cmd('init', self.repository_location)
@@ -849,6 +890,14 @@ class ArchiverTestCase(ArchiverTestCaseBase):
         # this is expected, although surprising, for why, see:
         # https://borgbackup.readthedocs.org/en/latest/faq.html#i-am-seeing-a-added-status-for-a-unchanged-file
         self.assert_in("A input/file2", output)
+
+    def test_create_delete_inbetween(self):
+        # Regression test case for bugfix in archive creation when a prior archive was deleted
+        self.create_test_files()
+        self.cmd('init', self.repository_location)
+        self.cmd('create', self.repository_location + '::test1', 'input')
+        self.cmd('delete', self.repository_location + '::test1')
+        self.cmd('create', self.repository_location + '::test2', 'input')
 
     def test_create_topical(self):
         now = time.time()
@@ -1111,11 +1160,219 @@ class ArchiverTestCase(ArchiverTestCaseBase):
         output = self.cmd('debug-delete-obj', self.repository_location, 'invalid')
         assert "is invalid" in output
 
+    def test_rewrite_basic(self):
+        self.create_test_files()
+        self.create_regular_file('dir2/file3', size=1024 * 80)
+        self.cmd('init', self.repository_location)
+        archive = self.repository_location + '::test0'
+        self.cmd('create', archive, 'input')
+        self.cmd('rewrite', archive, 'input/dir2', '-e', 'input/dir2/file3')
+        listing = self.cmd('list', '--short', archive)
+        assert 'file1' not in listing
+        assert 'dir2/file2' in listing
+        assert 'dir2/file3' not in listing
+
+    def test_rewrite_subtree_hardlinks(self):
+        # This is essentially the same problem set as in test_extract_hardlinks
+        self._extract_hardlinks_setup()
+        self.cmd('create', self.repository_location + '::test2', 'input')
+        self.cmd('rewrite', self.repository_location + '::test', 'input/dir1')
+        with changedir('output'):
+            self.cmd('extract', self.repository_location + '::test')
+            assert os.stat('input/dir1/hardlink').st_nlink == 2
+            assert os.stat('input/dir1/subdir/hardlink').st_nlink == 2
+            assert os.stat('input/dir1/aaaa').st_nlink == 2
+            assert os.stat('input/dir1/source2').st_nlink == 2
+        with changedir('output'):
+            self.cmd('extract', self.repository_location + '::test2')
+            assert os.stat('input/dir1/hardlink').st_nlink == 4
+
+    def test_rewrite_rechunkify(self):
+        with open(os.path.join(self.input_path, 'large_file'), 'wb') as fd:
+            fd.write(b'a' * 250)
+            fd.write(b'b' * 250)
+        self.cmd('init', self.repository_location)
+        self.cmd('create', '--chunker-params', '7,9,8,128', self.repository_location + '::test1', 'input')
+        self.cmd('create', self.repository_location + '::test2', 'input', '--no-files-cache')
+        list = self.cmd('list', self.repository_location + '::test1', 'input/large_file',
+                        '--format', '{num_chunks} {unique_chunks}')
+        num_chunks, unique_chunks = map(int, list.split(' '))
+        # test1 and test2 do not deduplicate
+        assert num_chunks == unique_chunks
+        self.cmd('rewrite', self.repository_location, '--chunker-params', 'default')
+        # test1 and test2 do deduplicate after rewrite
+        assert not int(self.cmd('list', self.repository_location + '::test1', 'input/large_file',
+                                '--format', '{unique_chunks}'))
+
+    def test_rewrite_recompress(self):
+        self.create_regular_file('compressible', size=10000)
+        self.cmd('init', self.repository_location)
+        self.cmd('create', self.repository_location + '::test', 'input')
+        list = self.cmd('list', self.repository_location + '::test', 'input/compressible',
+                        '--format', '{size} {csize}')
+        size, csize = map(int, list.split(' '))
+        assert csize >= size
+        self.cmd('rewrite', self.repository_location, '-C', 'lz4')
+        list = self.cmd('list', self.repository_location + '::test', 'input/compressible',
+                        '--format', '{size} {csize}')
+        size, csize = map(int, list.split(' '))
+        assert csize < size
+
+    def test_rewrite_dry_run(self):
+        self.create_regular_file('compressible', size=10000)
+        self.cmd('init', self.repository_location)
+        self.cmd('create', self.repository_location + '::test', 'input')
+        archives_before = self.cmd('list', self.repository_location + '::test')
+        self.cmd('rewrite', self.repository_location, '-n', '-e', 'input/compressible')
+        archives_after = self.cmd('list', self.repository_location + '::test')
+        assert archives_after == archives_before
+
+    def _rewrite_interrupt_patch(self, interrupt_after_n_1_files):
+        def interrupt(self, *args):
+            if interrupt_after_n_1_files:
+                self.interrupt = True
+                pi_save(self, *args)
+            else:
+                raise ArchiveRewriter.Interrupted
+
+        def process_item_patch(*args):
+            return pi_call.pop(0)(*args)
+
+        pi_save = ArchiveRewriter.process_item
+        pi_call = [pi_save] * interrupt_after_n_1_files + [interrupt]
+        return process_item_patch
+
+    def _test_rewrite_interrupt(self, create_stale_temp, change_args, interrupt_early):
+        self.create_test_files()
+        self.create_regular_file('dir2/abcdef')
+        self.cmd('init', self.repository_location)
+        self.cmd('create', self.repository_location + '::test', 'input')
+        process_files = 1
+        if interrupt_early:
+            process_files = 0
+        with patch.object(ArchiveRewriter, 'process_item', self._rewrite_interrupt_patch(process_files)):
+            self.cmd('rewrite', '-sv', '--list', self.repository_location, 'input/dir2')
+        assert 'test.rewrite' in self.cmd('list', self.repository_location)
+        if create_stale_temp:
+            # Create a test.rewrite.temp to see that it doesn't stumble over that
+            self.cmd('create', self.repository_location + '::test.rewrite.temp', '/dev/null')
+        if change_args:
+            with patch.object(sys, 'argv', sys.argv + ['non-forking tests don\'t use sys.argv']):
+                output = self.cmd('rewrite', '-sv', '--list', '-pC', 'lz4', self.repository_location, 'input/dir2')
+        else:
+            output = self.cmd('rewrite', '-sv', '--list', self.repository_location, 'input/dir2')
+        assert 'Found test.rewrite, will resume' in output
+        assert change_args == ('Command line changed' in output)
+        assert create_stale_temp == ('Found temporary replay-archive' in output)
+        if not interrupt_early:
+            assert 'Fast-forwarded to input/dir2/abcdef' in output
+            assert 'I input/dir2/abcdef' not in output
+        assert 'I input/dir2/file2' in output
+        archives = self.cmd('list', self.repository_location)
+        assert 'test.rewrite' not in archives
+        assert 'test' in archives
+        files = self.cmd('list', self.repository_location + '::test')
+        assert 'dir2/file2' in files
+        assert 'dir2/abcdef' in files
+        assert 'file1' not in files
+
+    def test_rewrite_interrupt(self):
+        # Again, this would be a job for pytest fixtures
+        self.tearDown()
+        for create_stale_temp, change_args, interrupt_early in [
+            # don't test all eight combinations, would take too long
+            (False, True, True),
+            (False, False, True),
+            (True, True, False),
+            (True, False, False),
+        ]:
+            self.setUp()
+            try:
+                # In _test_rewrite_interrupt --inplace is only hit with change_args
+                self._test_rewrite_interrupt(create_stale_temp, change_args, interrupt_early)
+            finally:
+                self.tearDown()
+        self.setUp()
+
+    @pytest.mark.skip()
+    def test_rewrite_interrupt_full(self):
+        # Again, this would be a job for pytest fixtures
+        self.tearDown()
+        for create_stale_temp in (True, False):
+            for change_args in (True, False):
+                for interrupt_early in (True, False):
+                    self.setUp()
+                    try:
+                        self._test_rewrite_interrupt(create_stale_temp, change_args, interrupt_early)
+                    finally:
+                        self.tearDown()
+        self.setUp()
+
+    def _test_rewrite_chunker_interrupt_patch(self, n_chunks):
+        real_add_chunk = Cache.add_chunk
+
+        def add_chunk(*args, **kwargs):
+            nonlocal n_chunks
+            if n_chunks <= 0:
+                frame = inspect.stack()[2]
+                try:
+                    caller_self = frame[0].f_locals['self']
+                    if caller_self.__class__ is ArchiveRewriter:
+                        caller_self.interrupt = True
+                finally:
+                    del frame
+            n_chunks -= 1
+            return real_add_chunk(*args, **kwargs)
+        return add_chunk
+
+    def test_rewrite_rechunkify_interrupt(self):
+        self.create_test_files()
+        self.cmd('init', self.repository_location)
+        self.cmd('create', self.repository_location + '::test', 'input')
+        archive_before = self.cmd('list', self.repository_location + '::test', '--format', '{sha512}')
+        with patch.object(Cache, 'add_chunk', self._test_rewrite_chunker_interrupt_patch(1)):
+            self.cmd('rewrite', '-p', '--chunker-params', '16,18,17,4095', self.repository_location)
+        assert 'test.rewrite' in self.cmd('list', self.repository_location)
+        output = self.cmd('rewrite', '-svp', '--debug', '--chunker-params', '16,18,17,4095', self.repository_location)
+        assert 'Found test.rewrite, will resume' in output
+        assert 'Copied 1 chunks from a partially processed item' in output
+        archive_after = self.cmd('list', self.repository_location + '::test', '--format', '{sha512}')
+        assert archive_after == archive_before
+
+    def test_rewrite_changed_source(self):
+        self.create_test_files()
+        self.cmd('init', self.repository_location)
+        self.cmd('create', self.repository_location + '::test', 'input')
+        with patch.object(ArchiveRewriter, 'process_item', self._rewrite_interrupt_patch(1)):
+            self.cmd('rewrite', self.repository_location, 'input/dir2')
+        assert 'test.rewrite' in self.cmd('list', self.repository_location)
+        self.cmd('delete', self.repository_location + '::test')
+        self.cmd('create', self.repository_location + '::test', 'input')
+        output = self.cmd('rewrite', self.repository_location, 'input/dir2')
+        assert 'Source archive changed, will discard test.rewrite and start over' in output
+
+    def test_rewrite_refuses_temporary(self):
+        self.cmd('init', self.repository_location)
+        self.cmd('rewrite', self.repository_location + '::cba.rewrite', exit_code=2)
+        self.cmd('rewrite', self.repository_location + '::abc.rewrite.temp', exit_code=2)
+
 
 @unittest.skipUnless('binary' in BORG_EXES, 'no borg.exe available')
 class ArchiverTestCaseBinary(ArchiverTestCase):
     EXE = 'borg.exe'
     FORK_DEFAULT = True
+
+    @unittest.skip('patches objects')
+    def test_rewrite_rechunkify_interrupt(self):
+        ...
+
+    @unittest.skip('patches objects')
+    def test_rewrite_interrupt(self):
+        ...
+
+    @unittest.skip('patches objects')
+    def test_rewrite_changed_source(self):
+        ...
 
 
 class ArchiverCheckTestCase(ArchiverTestCaseBase):
@@ -1232,9 +1489,6 @@ class RemoteArchiverTestCase(ArchiverTestCase):
 
 
 class DiffArchiverTestCase(ArchiverTestCaseBase):
-    create_test_files = ArchiverTestCase.create_test_files
-    create_regular_file = ArchiverTestCase.create_regular_file
-
     def test_basic_functionality(self):
         self.create_test_files()
         self.cmd('init', self.repository_location)

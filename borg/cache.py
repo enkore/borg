@@ -358,27 +358,29 @@ Chunk index:    {0.total_unique_chunks:20d} {0.total_chunks:20d}"""
             self.do_cache = os.path.isdir(archive_path)
             self.chunks = create_master_idx(self.chunks)
 
-    def add_chunk(self, id, data, stats):
+    def add_chunk(self, id, data, stats, check_csize=False):
         if not self.txn_active:
             self.begin_txn()
         size = len(data)
-        if self.seen_chunk(id, size):
+        count, _, stored_csize = self.get_chunk(id, size)
+        if count and not check_csize:
             return self.chunk_incref(id, stats)
         data = self.key.encrypt(data)
         csize = len(data)
-        self.repository.put(id, data, wait=False)
-        self.chunks[id] = (1, size, csize)
+        if csize != stored_csize:
+            self.repository.put(id, data, wait=False)
+        self.chunks[id] = (count + 1, size, csize)
         stats.update(size, csize, True)
         return id, size, csize
 
-    def seen_chunk(self, id, size=None):
-        refcount, stored_size, _ = self.chunks.get(id, (0, None, None))
+    def get_chunk(self, id, size=None):
+        refcount, stored_size, stored_csize = self.chunks.get(id, (0, None, None))
         if size is not None and stored_size is not None and size != stored_size:
             # we already have a chunk with that id, but different size.
             # this is either a hash collision (unlikely) or corruption or a bug.
-            raise Exception("chunk has same id [%r], but different size (stored: %d new: %d)!" % (
-                            id, stored_size, size))
-        return refcount
+            raise Exception("chunk has same id [%r], but different size (stored: %d new: %d)!" %
+                            (id, stored_size, size))
+        return refcount, stored_size, stored_csize
 
     def chunk_incref(self, id, stats):
         if not self.txn_active:

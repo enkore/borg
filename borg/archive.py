@@ -16,10 +16,12 @@ import sys
 import time
 from io import BytesIO
 from . import xattr
+from .compress import Compressor, COMPR_BUFFER
 from .helpers import Error, uid2user, user2uid, gid2group, group2gid, \
     parse_timestamp, to_localtime, format_time, format_timedelta, \
     Manifest, Statistics, decode_dict, make_path_safe, StableDict, int_to_bigint, bigint_to_int, \
-    ProgressIndicatorPercent
+    ProgressIndicatorPercent, ChunkIteratorFileWrapper, remove_surrogates, log_multi, DASHES, PatternMatcher, \
+    PathPrefixPattern, FnmatchPattern, open_item
 from .platform import acl_get, acl_set
 from .chunker import Chunker
 from .hashindex import ChunkIndex
@@ -231,7 +233,7 @@ Number of files: {0.stats.nfiles}'''.format(
         if self.show_progress:
             self.stats.show_progress(item=item, dt=0.2)
         self.items_buffer.add(item)
-        if time.time() - self.last_checkpoint > self.checkpoint_interval:
+        if self.checkpoint_interval and time.time() - self.last_checkpoint > self.checkpoint_interval:
             self.write_checkpoint()
             self.last_checkpoint = time.time()
 
@@ -240,7 +242,7 @@ Number of files: {0.stats.nfiles}'''.format(
         del self.manifest.archives[self.checkpoint_name]
         self.cache.chunk_decref(self.id, self.stats)
 
-    def save(self, name=None, timestamp=None):
+    def save(self, name=None, timestamp=None, additional_metadata=None):
         name = name or self.name
         if name in self.manifest.archives:
             raise self.AlreadyExists(name)
@@ -253,7 +255,7 @@ Number of files: {0.stats.nfiles}'''.format(
             self.end = timestamp
             start = timestamp
             end = timestamp  # we only have 1 value
-        metadata = StableDict({
+        metadata = {
             'version': 1,
             'name': name,
             'items': self.items_buffer.chunks,
@@ -263,8 +265,9 @@ Number of files: {0.stats.nfiles}'''.format(
             'time': start.isoformat(),
             'time_end': end.isoformat(),
             'chunker_params': self.chunker_params,
-        })
-        data = msgpack.packb(metadata, unicode_errors='surrogateescape')
+        }
+        metadata.update(additional_metadata or {})
+        data = msgpack.packb(StableDict(metadata), unicode_errors='surrogateescape')
         self.id = self.key.id_hash(data)
         self.cache.add_chunk(self.id, data, self.stats)
         self.manifest.archives[name] = {'id': self.id, 'time': metadata['time']}
@@ -458,6 +461,8 @@ Number of files: {0.stats.nfiles}'''.format(
         self.manifest.archives[name] = {'id': new_id, 'time': metadata[b'time']}
         self.cache.chunk_decref(self.id, self.stats)
         del self.manifest.archives[self.name]
+        self.name = name
+        self.id = new_id
 
     def delete(self, stats, progress=False):
         unpacker = msgpack.Unpacker(use_list=False)
@@ -569,7 +574,7 @@ Number of files: {0.stats.nfiles}'''.format(
         if ids is not None:
             # Make sure all ids are available
             for id_ in ids:
-                if not cache.seen_chunk(id_):
+                if not cache.get_chunk(id_)[0]:
                     break
             else:
                 chunks = [cache.chunk_incref(id_, self.stats) for id_ in ids]
@@ -917,3 +922,288 @@ class ArchiveChecker:
         if self.repair:
             self.manifest.write()
             self.repository.commit(save_space=save_space)
+
+
+class ArchiveRewriter:
+    class FakeTargetArchive:
+        def __init__(self):
+            self.stats = Statistics()
+
+    class Interrupted(Exception):
+        def __init__(self, metadata=None):
+            self.metadata = metadata or {}
+
+    @staticmethod
+    def is_temporary_archive(archive_name):
+        return archive_name.endswith('.rewrite') or archive_name.endswith('.rewrite.temp')
+
+    def __init__(self, repository, manifest, key, cache, matcher,
+                 exclude_caches=False, exclude_if_present=None, keep_tag_files=False,
+                 chunker_params=None, compression=None, force_recompress=False,
+                 dry_run=False, stats=False, progress=False, list=False):
+        self.repository = repository
+        self.key = key
+        self.manifest = manifest
+        self.cache = cache
+
+        self.matcher = matcher
+        self.exclude_caches = exclude_caches
+        self.exclude_if_present = exclude_if_present or []
+        self.keep_tag_files = keep_tag_files
+
+        self.chunker_params = chunker_params or CHUNKER_PARAMS
+        self.compression = compression or dict(name='none')
+        self.force_recompress = force_recompress
+        self.seen_chunks = set()
+        self.recompress = bool(compression) or force_recompress
+        self.rechunkify = bool(chunker_params)
+        compr_args = dict(buffer=COMPR_BUFFER)
+        compr_args.update(self.compression)
+        key.compressor = Compressor(**compr_args)
+
+        self.dry_run = dry_run
+        self.stats = stats
+        self.progress = progress
+        self.list = list
+
+        self.interrupt = False
+        self.errors = False
+
+    def rewrite(self, archive_name):
+        assert not self.is_temporary_archive(archive_name)
+        archive = self.open_archive(archive_name)
+        target, resume_from = self.create_target_or_resume(archive)
+
+        if self.exclude_if_present or self.exclude_caches:
+            self.matcher_add_tagged_dirs(archive)
+        try:
+            self.process_items(archive, target, resume_from)
+        except self.Interrupted as e:
+            return self.save(archive, target, completed=False, metadata=e.metadata)
+        return self.save(archive, target)
+
+    def process_items(self, archive, target, resume_from=None):
+        matcher = self.matcher
+        target_is_subset = not matcher.empty()
+        hardlink_masters = {} if target_is_subset else None
+
+        def item_is_hardlink_master(item):
+            return (target_is_subset and
+                    stat.S_ISREG(item[b'mode']) and
+                    item.get(b'hardlink_master', True) and
+                    b'source' not in item and
+                    not matcher.match(item[b'path']))
+
+        for item in archive.iter_items(
+                filter=lambda item: item_is_hardlink_master(item) or matcher.match(item[b'path'])):
+            if item_is_hardlink_master(item):
+                # Re-visit all of these items in the archive even when fast-forwarding to rebuild hardlink_masters
+                hardlink_masters[item[b'path']] = (item.get(b'chunks'), None)
+                continue
+            if resume_from:
+                # Fast forward to after the last processed file
+                if item[b'path'] == resume_from:
+                    logger.info('Fast-forwarded to %s', remove_surrogates(item[b'path']))
+                    resume_from = None
+                continue
+            if target_is_subset and stat.S_ISREG(item[b'mode']) and item.get(b'source') in hardlink_masters:
+                # master of this hard link is outside the target subset
+                chunks, new_source = hardlink_masters[item[b'source']]
+                if new_source is None:
+                    # First item to use this master, move the chunks
+                    item[b'chunks'] = chunks
+                    hardlink_masters[item[b'source']] = (None, item[b'path'])
+                    del item[b'source']
+                else:
+                    # Master was already moved, only update this item's source
+                    item[b'source'] = new_source
+            if not self.dry_run:
+                try:
+                    self.process_item(archive, target, item)
+                except self.Interrupted:
+                    if self.progress:
+                        target.stats.show_progress(final=True)
+                    raise
+        assert resume_from is None, 'Reached end of source archive while fast-forwarding.'
+        if self.progress:
+            target.stats.show_progress(final=True)
+
+    def process_item(self, archive, target, item):
+        if b'chunks' in item:
+            self.process_chunks(archive, target, item)
+            target.stats.nfiles += 1
+        target.add_item(item)
+        if self.list:
+            logger.info('I %s', remove_surrogates(item[b'path']))
+        if self.interrupt:
+            raise self.Interrupted
+
+    def process_chunks(self, archive, target, item):
+        if not self.recompress and not self.rechunkify:
+            for chunk in item[b'chunks']:
+                self.cache.chunk_incref(chunk[0], target.stats)
+            return
+        chunk_iterator = archive.pipeline.fetch_many([c[0] for c in item[b'chunks']])
+        if self.rechunkify:
+            file = ChunkIteratorFileWrapper(chunk_iterator)
+            chunk_iterator = target.chunker.chunkify(file)
+        new_chunks = []
+        if target.rewrite_partial_chunks:
+            # No incref, create_target_or_resume already did that
+            new_chunks = target.rewrite_partial_chunks
+            target.rewrite_partial_chunks = None
+            for chunk in new_chunks:
+                if chunk[1] > 4096:
+                    self.seen_chunks.add(chunk[0])
+                refcount, _, _ = self.cache.get_chunk(chunk[0])
+                # not rechunkify-ing: this chunk will *become* unique for refcount == 2 (this & source)
+                unique = (self.rechunkify and refcount == 1) or (not self.rechunkify and refcount == 2)
+                target.stats.update(chunk[1], chunk[2], unique)
+                next(chunk_iterator)
+            logger.debug('Copied %d chunks from a partially processed item', len(new_chunks))
+        for chunk in chunk_iterator:
+            # TODO: detect / skip / force like in recompress (cherry pick compr API changes from there)
+            # TODO: (after feature-hmac is merged, or rejected)
+            chunk_id = self.key.id_hash(chunk)
+            large_chunk = len(chunk) > 4096
+            if large_chunk and chunk_id in self.seen_chunks:
+                new_chunks.append(self.cache.chunk_incref(chunk_id, target.stats))
+            else:
+                new_chunks.append(self.cache.add_chunk(chunk_id, chunk, target.stats, check_csize=self.recompress))
+                if large_chunk:
+                    self.seen_chunks.add(chunk_id)
+            if self.progress:
+                target.stats.show_progress(item=item, dt=0.2)
+            if self.interrupt:
+                raise self.Interrupted({
+                    'rewrite_partial_chunks': new_chunks,
+                })
+        if self.rechunkify:
+            assert file.exhausted
+        item[b'chunks'] = new_chunks
+
+    def save(self, archive, target, completed=True, metadata=None):
+        if self.dry_run:
+            return completed
+        if completed:
+            timestamp = archive.ts.replace(tzinfo=None)
+            target.save(timestamp=timestamp, additional_metadata={
+                'cmdline': archive.metadata[b'cmdline'],
+                'rewrite_cmdline': sys.argv,
+            })
+            archive.delete(Statistics(), progress=self.progress)
+            target.rename(archive.name)
+            if self.stats:
+                target.end = datetime.utcnow()
+                log_multi(DASHES,
+                          str(target),
+                          DASHES,
+                          str(target.stats),
+                          str(self.cache),
+                          DASHES)
+        else:
+            additional_metadata = metadata or {}
+            additional_metadata.update({
+                'rewrite_source_id': archive.id,
+                'rewrite_args': sys.argv[1:],
+            })
+            target.save(name=archive.name + '.rewrite', additional_metadata=additional_metadata)
+            logger.info('Run the same command again to resume.')
+        return completed
+
+    def matcher_add_tagged_dirs(self, archive):
+        def exclude(dir, tag_item):
+            if self.keep_tag_files:
+                tag_files.append(PathPrefixPattern(tag_item[b'path']))
+                tagged_dirs.append(FnmatchPattern(dir + '/'))
+            else:
+                tagged_dirs.append(PathPrefixPattern(dir))
+
+        matcher = self.matcher
+        tag_files = []
+        tagged_dirs = []
+        # build hardlink masters, but only for paths ending in CACHEDIR.TAG, so we can read hard-linked CACHEDIR.TAGs
+        cachedir_masters = {}
+
+        for item in archive.iter_items(
+                filter=lambda item: item[b'path'].endswith('CACHEDIR.TAG') or matcher.match(item[b'path'])):
+            if item[b'path'].endswith('CACHEDIR.TAG'):
+                cachedir_masters[item[b'path']] = item
+            if stat.S_ISREG(item[b'mode']):
+                dir, tag_file = os.path.split(item[b'path'])
+                if tag_file in self.exclude_if_present:
+                    exclude(dir, item)
+                if self.exclude_caches and tag_file == 'CACHEDIR.TAG':
+                    tag_contents = b'Signature: 8a477f597d28d172789f06886806bc55'
+                    if b'chunks' in item:
+                        file = open_item(archive, item)
+                    else:
+                        file = open_item(archive, cachedir_masters[item[b'source']])
+                    if file.read(len(tag_contents)).startswith(tag_contents):
+                        exclude(dir, item)
+        matcher.add(tag_files, True)
+        matcher.add(tagged_dirs, False)
+
+    def create_target_or_resume(self, archive):
+        if self.dry_run:
+            return self.FakeTargetArchive(), None
+        target_name = archive.name + '.rewrite'
+        resume = target_name in self.manifest.archives
+        if resume:
+            target, resume_from = self.try_resume(archive, target_name)
+            if target:
+                return target, resume_from
+        return self.create_target_archive(target_name), None
+
+    def try_resume(self, archive, target_name):
+        logger.info('Found %s, will resume interrupted operation', target_name)
+        old_target = self.open_archive(target_name)
+        resume_id = old_target.metadata[b'rewrite_source_id']
+        resume_args = [arg.decode('utf-8', 'surrogateescape') for arg in old_target.metadata[b'rewrite_args']]
+        if resume_id != archive.id:
+            logger.warning('Source archive changed, will discard %s and start over', target_name)
+            logger.warning('Saved fingerprint:   %s', hexlify(resume_id).decode('ascii'))
+            logger.warning('Current fingerprint: %s', archive.fpr)
+            old_target.delete(Statistics(), progress=self.progress)
+            return None, None  # can't resume
+        if resume_args != sys.argv[1:]:
+            logger.warning('Command line changed, this might lead to inconsistencies')
+            logger.warning('Saved:   %s', repr(resume_args))
+            logger.warning('Current: %s', repr(sys.argv[1:]))
+        target_name += '.temp'
+        if target_name in self.manifest.archives:
+            logger.warning('Found temporary replay-archive from earlier resume, deleting')
+            must_delete = self.open_archive(target_name)
+            must_delete.delete(Statistics(), progress=self.progress)
+        target = self.create_target_archive(target_name)
+        logger.info('Replaying items from interrupted operation...')
+        item = None
+        for item in old_target.iter_items():
+            if b'chunks' in item:
+                for chunk in item[b'chunks']:
+                    self.cache.chunk_incref(chunk[0], target.stats)
+                target.stats.nfiles += 1
+            target.add_item(item)
+        if item:
+            resume_from = item[b'path']
+        else:
+            resume_from = None
+        if self.progress:
+            old_target.stats.show_progress(final=True)
+        target.rewrite_partial_chunks = old_target.metadata.get(b'rewrite_partial_chunks', [])
+        for chunk_id, _, _ in target.rewrite_partial_chunks:
+            # incref now, otherwise old_target.delete() might delete these chunks
+            self.cache.chunk_incref(chunk_id, target.stats)
+        old_target.delete(Statistics(), progress=self.progress)
+        logger.info('Done replaying items')
+        return target, resume_from
+
+    def create_target_archive(self, name):
+        archive = Archive(self.repository, self.key, self.manifest, name, create=True,
+                          progress=self.progress, chunker_params=self.chunker_params, cache=self.cache,
+                          checkpoint_interval=0)
+        archive.rewrite_partial_chunks = None
+        return archive
+
+    def open_archive(self, name, **kwargs):
+        return Archive(self.repository, self.key, self.manifest, name, cache=self.cache, **kwargs)

@@ -595,6 +595,15 @@ Examples
     no key file found for repository
 
 
+
+.. include:: usage/rewrite.rst.inc
+
+Examples
+~~~~~~~~
+::
+
+    TODO/later
+
 Miscellaneous Help
 ------------------
 
