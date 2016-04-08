@@ -10,7 +10,7 @@ from .key import PlaintextKey
 from .logger import create_logger
 logger = create_logger()
 from .helpers import Error, get_cache_dir, decode_dict, int_to_bigint, \
-    bigint_to_int, format_file_size, yes
+    bigint_to_int, format_file_size, yes, map_internal_oserror
 from .locking import UpgradableLock
 from .hashindex import ChunkIndex
 
@@ -164,6 +164,7 @@ Chunk index:    {0.total_unique_chunks:20d} {0.total_chunks:20d}"""
             self.lock.release()
             self.lock = None
 
+    @map_internal_oserror
     def _read_files(self):
         self.files = {}
         self._newest_mtime = 0
@@ -180,6 +181,7 @@ Chunk index:    {0.total_unique_chunks:20d} {0.total_chunks:20d}"""
                     # in the end, this takes about 240 Bytes per file
                     self.files[path_hash] = msgpack.packb(item)
 
+    @map_internal_oserror
     def begin_txn(self):
         # Initialize transaction snapshot
         txn_dir = os.path.join(self.path, 'txn.tmp')
@@ -358,6 +360,7 @@ Chunk index:    {0.total_unique_chunks:20d} {0.total_chunks:20d}"""
             self.do_cache = os.path.isdir(archive_path)
             self.chunks = create_master_idx(self.chunks)
 
+    @map_internal_oserror
     def add_chunk(self, id, data, stats):
         if not self.txn_active:
             self.begin_txn()
@@ -380,6 +383,7 @@ Chunk index:    {0.total_unique_chunks:20d} {0.total_chunks:20d}"""
                             id, stored_size, size))
         return refcount
 
+    @map_internal_oserror
     def chunk_incref(self, id, stats):
         if not self.txn_active:
             self.begin_txn()
@@ -388,6 +392,7 @@ Chunk index:    {0.total_unique_chunks:20d} {0.total_chunks:20d}"""
         stats.update(size, csize, False)
         return id, size, csize
 
+    @map_internal_oserror
     def chunk_decref(self, id, stats):
         if not self.txn_active:
             self.begin_txn()

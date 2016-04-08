@@ -72,6 +72,16 @@ class ExtensionModuleError(Error):
     """The Borg binary extension modules do not seem to be properly installed"""
 
 
+def map_internal_oserror(function):
+    @wraps(function)
+    def wrapper(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except OSError as e:
+            raise InternalOSError from e
+    return wrapper
+
+
 def check_extension_modules():
     from . import platform
     if hashindex.API_VERSION != 2:

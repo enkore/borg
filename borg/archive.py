@@ -19,7 +19,7 @@ from . import xattr
 from .helpers import Error, uid2user, user2uid, gid2group, group2gid, \
     parse_timestamp, to_localtime, format_time, format_timedelta, \
     Manifest, Statistics, decode_dict, make_path_safe, StableDict, int_to_bigint, bigint_to_int, \
-    ProgressIndicatorPercent
+    ProgressIndicatorPercent, map_internal_oserror
 from .platform import acl_get, acl_set
 from .chunker import Chunker
 from .hashindex import ChunkIndex
@@ -224,6 +224,7 @@ Number of files: {0.stats.nfiles}'''.format(
         for item in self.pipeline.unpack_many(self.metadata[b'items'], filter=filter, preload=preload):
             yield item
 
+    @map_internal_oserror
     def add_item(self, item):
         unknown_keys = set(item) - ITEM_KEYS
         assert not unknown_keys, ('unknown item metadata keys detected, please update ITEM_KEYS: %s',
