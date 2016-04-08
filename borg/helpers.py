@@ -60,6 +60,10 @@ class ErrorWithTraceback(Error):
     traceback = True
 
 
+class InternalOSError(ErrorWithTraceback):
+    """Error while accessing repository / cache files"""
+
+
 class IntegrityError(ErrorWithTraceback):
     """Data integrity error"""
 
