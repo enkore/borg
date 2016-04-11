@@ -776,6 +776,22 @@ class ArchiverTestCase(ArchiverTestCaseBase):
         with changedir('output'):
             self.cmd('extract', self.repository_location + '::test', exit_code=1)
 
+    def test_extract_ignore_error(self):
+        with open(os.path.join(self.input_path, 'file1'), 'wb') as fd:
+            fd.write(b'a' * 280)
+            fd.write(b'b' * 280)
+        self.cmd('init', self.repository_location)
+        self.cmd('create', '--chunker-params', '7,9,8,128', self.repository_location + '::test', 'input')
+        name = sorted(os.listdir(os.path.join(self.tmpdir, 'repository', 'data', '0')), reverse=True)[0]
+        with open(os.path.join(self.tmpdir, 'repository', 'data', '0', name), 'r+b') as fd:
+            fd.seek(100)
+            fd.write(b'XXXX')
+        with changedir('output'):
+            output = self.cmd('extract', '--skip-errors', self.repository_location + '::test', exit_code=1)
+            assert 'input/file1: chunk' in output
+            assert os.stat('input/file1').st_size == 560
+        self.cmd('check', self.repository_location, exit_code=1)
+
     def test_rename(self):
         self.create_regular_file('file1', size=1024 * 80)
         self.create_regular_file('dir2/file2', size=1024 * 80)
