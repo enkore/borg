@@ -8,12 +8,6 @@ from cpython.buffer cimport PyBUF_SIMPLE, PyObject_GetBuffer, PyBuffer_Release
 API_VERSION = 2
 
 
-cdef Py_buffer ro_buffer(object data) except *:
-    cdef Py_buffer view
-    PyObject_GetBuffer(data, &view, PyBUF_SIMPLE)
-    return view
-
-
 cdef extern from "openssl/rand.h":
     int  RAND_bytes(unsigned char *buf, int num)
 
@@ -51,6 +45,12 @@ cdef extern from "openssl/hmac.h":
                     const void *key, int key_len,
                     const unsigned char *data, int data_len,
                     unsigned char *md, unsigned int *md_len) nogil
+
+
+cdef Py_buffer ro_buffer(object data) except *:
+    cdef Py_buffer view
+    PyObject_GetBuffer(data, &view, PyBUF_SIMPLE)
+    return view
 
 import struct
 
@@ -158,19 +158,20 @@ cdef class AES:
             PyBuffer_Release(&data_buf)
 
 
-def hmac_sha256(key_,  data):
-    md_ = bytearray(32)
+def hmac_sha256(key, data):
+    md = bytes(32)
     cdef Py_buffer data_buf = ro_buffer(data)
-    cdef int data_len = len(data)
-    cdef int key_len = len(key_)
-    cdef unsigned char *md = md_
-    cdef unsigned char *key = key_
+    cdef const unsigned char *key_ptr = key
+    cdef int key_len = len(key)
+    cdef unsigned char *md_ptr = md
     try:
-        with nogil:
-            rc = HMAC(EVP_sha256(), <const unsigned char*> key, key_len,
-                      <const unsigned char*> data_buf.buf, data_len, md, NULL)
-        if not rc:
+        if data_buf.len > 8096:
+            with nogil:
+                rc = HMAC(EVP_sha256(), key_ptr, key_len, <const unsigned char*> data_buf.buf, data_buf.len, md_ptr, NULL)
+        else:
+            rc = HMAC(EVP_sha256(), key_ptr, key_len, <const unsigned char*> data_buf.buf, data_buf.len, md_ptr, NULL)
+        if rc != md_ptr:
             raise Exception('HMAC(EVP_sha256) failed')
     finally:
         PyBuffer_Release(&data_buf)
-    return md_
+    return md

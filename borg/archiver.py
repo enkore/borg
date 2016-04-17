@@ -809,10 +809,9 @@ class Archiver:
                         self.outq.put((None, data))
                         self.inq.task_done()
                         continue
-                    # this probably generates duplicate CTR values, depending on how exactly the generated code
-                    # looks like and what exactly EVP does.
-                    # IOW this is totally unsafe.
-                    self.outq.put((id_, key.encrypt(compressor.decompress(decrypted_data))))
+                    decompressed_data = compressor.decompress(decrypted_data)
+                    key.assert_chunk_id(id_, decompressed_data)
+                    self.outq.put((id_, key.encrypt(decompressed_data)))
 
             def push_chunk(self, id_, data):
                 self.inq.put((id_, data))

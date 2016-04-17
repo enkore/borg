@@ -82,6 +82,9 @@ class KeyBase:
         """raise IntegrityError if id doesn't match data"""
         pass
 
+    def assert_chunk_id(self, id, data):
+        """Raise IntegrityError if the chunk id doesn't match the data."""
+
 
 class PlaintextKey(KeyBase):
     TYPE = 0x02
@@ -148,7 +151,8 @@ class AESKeyBase(KeyBase):
         return b''.join((self.TYPE_STR, hmac, data))
 
     def decrypt(self, id, data, decompress=True):
-        if not (data[0] == self.TYPE or data[0] == PassphraseKey.TYPE and isinstance(self, RepoKey)):
+        if not (data[0] == self.TYPE or
+            data[0] == PassphraseKey.TYPE and isinstance(self, RepoKey)):
             raise IntegrityError('Invalid encryption envelope')
         data_view = memoryview(data)
         hmac_given = data_view[1:33]
@@ -163,6 +167,7 @@ class AESKeyBase(KeyBase):
         if id:
             self.assert_chunk_id(id, data)
         return data
+
 
     def assert_chunk_id(self, id, data):
         hmac_given = id

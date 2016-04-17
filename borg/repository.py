@@ -317,7 +317,7 @@ class Repository:
         if self.segments[segment] == 0:
             self.compact.add(segment)
 
-    def check(self, enc_key, repair=False, save_space=False):
+    def check(self, enc_key=None, repair=False, save_space=False):
         """Check repository consistency
 
         This method verifies all segment checksums and makes sure
@@ -382,18 +382,19 @@ class Repository:
             self.write_index()
         self.rollback()
 
-        seen, used = set(), set()
-        from .crypto import num_aes_blocks
-        for key, _ in self.open_index(self.get_transaction_id()).iteritems():
-            data = self.get(key)
-            hash = enc_key.id_hash(data)
-            if hash not in seen:
-                seen.add(hash)
-                num_blocks = num_aes_blocks(len(data) - 41)
-                nonce = enc_key.extract_nonce(data)
-                for counter in range(nonce, nonce + num_blocks):
-                    assert counter not in used, "Reused CTR %d" % counter
-                    used.add(counter)
+        if enc_key:
+            seen, used = set(), set()
+            from .crypto import num_aes_blocks
+            for key, _ in self.open_index(self.get_transaction_id()).iteritems():
+                data = self.get(key)
+                hash = enc_key.id_hash(data)
+                if hash not in seen:
+                    seen.add(hash)
+                    num_blocks = num_aes_blocks(len(data) - 41)
+                    nonce = enc_key.extract_nonce(data)
+                    for counter in range(nonce, nonce + num_blocks):
+                        assert counter not in used, "Reused CTR %d" % counter
+                        used.add(counter)
 
         if error_found:
             if repair:
