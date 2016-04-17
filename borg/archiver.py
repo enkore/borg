@@ -780,9 +780,9 @@ class Archiver:
                     self.threads.append(thread)
                 self.last_segment_id = repository.io.get_latest_segment()
 
-            def _pull_chunk(self):
+            def _pull_chunk(self, block=False):
                 try:
-                    id_, data = self.outq.get_nowait()
+                    id_, data = self.outq.get(block=block)
                 except Empty:
                     return False
                 if id_ is None:
@@ -818,7 +818,7 @@ class Archiver:
 
             def pull_excess(self):
                 while self.outq.qsize() > self.qtresh:
-                    if not self._pull_chunk():
+                    if not self._pull_chunk(block=True):
                         break
                 self.check_commit()
 
