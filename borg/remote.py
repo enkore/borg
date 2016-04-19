@@ -300,36 +300,35 @@ class RemoteRepository:
                             logging.log(level, msg.rstrip())
                         else:
                             sys.stderr.write("Remote: " + line)
-            if w:
-                while not self.to_send and (calls or self.preload_ids) and len(waiting_for) < 100:
-                    if calls:
-                        if is_preloaded:
-                            if calls[0] in self.cache:
-                                waiting_for.append(fetch_from_cache(calls.pop(0)))
-                        else:
-                            args = calls.pop(0)
-                            if cmd == 'get' and args in self.cache:
-                                waiting_for.append(fetch_from_cache(args))
-                            else:
-                                self.msgid += 1
-                                waiting_for.append(self.msgid)
-                                self.to_send = msgpack.packb((1, self.msgid, cmd, args))
-                    if not self.to_send and self.preload_ids:
-                        args = (self.preload_ids.pop(0),)
-                        self.msgid += 1
-                        self.cache.setdefault(args, []).append(self.msgid)
-                        self.to_send = msgpack.packb((1, self.msgid, cmd, args))
 
-                if self.to_send:
-                    try:
-                        self.to_send = self.to_send[os.write(self.stdin_fd, self.to_send):]
-                    except OSError as e:
-                        # io.write might raise EAGAIN even though select indicates
-                        # that the fd should be writable
-                        if e.errno != errno.EAGAIN:
-                            raise
-                if not self.to_send and not (calls or self.preload_ids):
-                    w_fds = []
+            while not self.to_send and (calls or self.preload_ids) and len(waiting_for) < 100:
+                if calls:
+                    if is_preloaded:
+                        if calls[0] in self.cache:
+                            waiting_for.append(fetch_from_cache(calls.pop(0)))
+                    else:
+                        args = calls.pop(0)
+                        if cmd == 'get' and args in self.cache:
+                            waiting_for.append(fetch_from_cache(args))
+                        else:
+                            self.msgid += 1
+                            waiting_for.append(self.msgid)
+                            self.to_send = msgpack.packb((1, self.msgid, cmd, args))
+                if not self.to_send and self.preload_ids:
+                    args = (self.preload_ids.pop(0),)
+                    self.msgid += 1
+                    self.cache.setdefault(args, []).append(self.msgid)
+                    self.to_send = msgpack.packb((1, self.msgid, cmd, args))
+            if w and self.to_send:
+                try:
+                    self.to_send = self.to_send[os.write(self.stdin_fd, self.to_send):]
+                except OSError as e:
+                    # io.write might raise EAGAIN even though select indicates
+                    # that the fd should be writable
+                    if e.errno != errno.EAGAIN:
+                        raise
+            if not self.to_send and not (calls or self.preload_ids):
+                w_fds = []
         self.ignore_responses |= set(waiting_for)
 
     def check(self, repair=False, save_space=False):
