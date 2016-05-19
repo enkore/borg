@@ -1,10 +1,10 @@
+from binascii import hexlify
 import errno
 import fcntl
 import logging
 import os
 import select
 import shlex
-import shutil
 from subprocess import Popen, PIPE
 import sys
 import tempfile
@@ -422,30 +422,30 @@ class RepositoryCache(RepositoryNoCache):
     """
     def __init__(self, repository):
         super().__init__(repository)
-        self.cache = LRUCache(100, dispose=dispose_entry)
+        self.cache = LRUCache(100, dispose=self.dispose_entry)
         self.basedir = tempfile.mkdtemp()
         self.size = 0
 
     def key_filename(self, key):
         return os.path.join(self.basedir, hexlify(key).decode())
 
-    def dispose_entry(self, entry):
-        size, filename = entry
-        self.size -= size
-        os.unlink(filename)
-
     def backoff(self):
         self.cache._capacity /= 2
         self.cache.shrink_to_capacity()
 
-    def backoff_ahead(self):
+    def backoff_early(self):
         stat_fs = os.statvfs(self.basedir)
         available_space = stat_fs.f_bsize * stat_fs.f_bavail
         if available_space < 0.25 * self.size:
             self.backoff()
 
-    def cache(self, key, data):
-        self.backoff_ahead()
+    def dispose_entry(self, entry):
+        size, filename = entry
+        self.size -= size
+        os.unlink(filename)
+
+    def add_entry(self, key, data):
+        self.backoff_early()
 
         filename = self.key_filename(key)
         try:
@@ -464,7 +464,7 @@ class RepositoryCache(RepositoryNoCache):
 
     def close(self):
         self.cache.clear()
-        os.unlink(self.basedir)
+        os.rmdir(self.basedir)
 
     def get_many(self, keys):
         unknown_keys = [key for key in keys if key not in self.cache]
@@ -477,7 +477,7 @@ class RepositoryCache(RepositoryNoCache):
             except KeyError:
                 for key_, data in repository_iterator:
                     if key_ == key:
-                        yield self.cache(key, data)
+                        yield self.add_entry(key, data)
                         break
         # Consume any pending requests
         for _ in repository_iterator:
