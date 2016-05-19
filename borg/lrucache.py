@@ -10,8 +10,7 @@ class LRUCache:
             "Unexpected attempt to replace a cached item,"
             " without first deleting the old item.")
         self._lru.append(key)
-        while len(self._lru) > self._capacity:
-            del self[self._lru[0]]
+        self.shrink_to_capacity()
         self._cache[key] = value
 
     def __getitem__(self, key):
@@ -39,3 +38,7 @@ class LRUCache:
 
     def __len__(self):
         return len(self._cache)
+
+    def shrink_to_capacity(self):
+        while len(self._lru) > self._capacity:
+            del self[self._lru[0]]
