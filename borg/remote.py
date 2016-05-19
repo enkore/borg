@@ -9,8 +9,8 @@ import sys
 import tempfile
 
 from . import __version__
-
 from .helpers import Error, IntegrityError, get_home_dir, sysinfo, bin_to_hex
+from .lrucache import LRUCache
 from .repository import Repository
 
 import msgpack
@@ -416,30 +416,41 @@ class RepositoryNoCache:
 class RepositoryCache(RepositoryNoCache):
     """A caching Repository wrapper
 
-    Caches Repository GET operations using a local temporary Repository.
+    Caches Repository GET operations locally.
     """
     def __init__(self, repository):
         super().__init__(repository)
-        tmppath = tempfile.mkdtemp(prefix='borg-tmp')
-        self.caching_repo = Repository(tmppath, create=True, exclusive=True)
-        self.caching_repo.__enter__()  # handled by context manager in base class
+        self.cache = LRUCache(100, dispose=os.unlink)
+
+    def _cache(self, key, data):
+        try:
+            with tempfile.NamedTemporaryFile(prefix='borg-tmp', delete=False) as file:
+                file.write(data)
+        except OSError as os_error:
+            if os_error.errno == errno.ENOSPC:
+                self.cache._capacity /= 2
+                self.cache.shrink_to_capacity()
+            else:
+                raise
+        else:
+            self.cache._capacity += 1
+            self.cache[key] = file.name
+        return data
 
     def close(self):
-        if self.caching_repo is not None:
-            self.caching_repo.destroy()
-            self.caching_repo = None
+        self.cache.clear()
 
     def get_many(self, keys):
-        unknown_keys = [key for key in keys if key not in self.caching_repo]
+        unknown_keys = [key for key in keys if key not in self.cache]
         repository_iterator = zip(unknown_keys, self.repository.get_many(unknown_keys))
         for key in keys:
             try:
-                yield self.caching_repo.get(key)
-            except Repository.ObjectNotFound:
+                with open(self.cache[key], 'rb') as file:
+                    yield file.read()
+            except KeyError:
                 for key_, data in repository_iterator:
                     if key_ == key:
-                        self.caching_repo.put(key, data)
-                        yield data
+                        yield self._cache(key, data)
                         break
         # Consume any pending requests
         for _ in repository_iterator:
