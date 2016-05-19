@@ -4,6 +4,7 @@ import logging
 import os
 import select
 import shlex
+import shutil
 from subprocess import Popen, PIPE
 import sys
 import tempfile
@@ -414,43 +415,69 @@ class RepositoryNoCache:
 
 
 class RepositoryCache(RepositoryNoCache):
-    """A caching Repository wrapper
+    """
+    A caching Repository wrapper.
 
     Caches Repository GET operations locally.
     """
     def __init__(self, repository):
         super().__init__(repository)
-        self.cache = LRUCache(100, dispose=os.unlink)
+        self.cache = LRUCache(100, dispose=dispose_entry)
+        self.basedir = tempfile.mkdtemp()
+        self.size = 0
 
-    def _cache(self, key, data):
+    def key_filename(self, key):
+        return os.path.join(self.basedir, hexlify(key).decode())
+
+    def dispose_entry(self, entry):
+        size, filename = entry
+        self.size -= size
+        os.unlink(filename)
+
+    def backoff(self):
+        self.cache._capacity /= 2
+        self.cache.shrink_to_capacity()
+
+    def backoff_ahead(self):
+        stat_fs = os.statvfs(self.basedir)
+        available_space = stat_fs.f_bsize * stat_fs.f_bavail
+        if available_space < 0.25 * self.size:
+            self.backoff()
+
+    def cache(self, key, data):
+        self.backoff_ahead()
+
+        filename = self.key_filename(key)
         try:
-            with tempfile.NamedTemporaryFile(prefix='borg-tmp', delete=False) as file:
+            with open(filename, 'wb') as file:
                 file.write(data)
         except OSError as os_error:
             if os_error.errno == errno.ENOSPC:
-                self.cache._capacity /= 2
-                self.cache.shrink_to_capacity()
+                self.backoff()
             else:
                 raise
         else:
+            self.size += len(data)
             self.cache._capacity += 1
-            self.cache[key] = file.name
+            self.cache[key] = len(data), filename
         return data
 
     def close(self):
         self.cache.clear()
+        os.unlink(self.basedir)
 
     def get_many(self, keys):
         unknown_keys = [key for key in keys if key not in self.cache]
         repository_iterator = zip(unknown_keys, self.repository.get_many(unknown_keys))
         for key in keys:
             try:
-                with open(self.cache[key], 'rb') as file:
+                _, filename = self.cache[key]
+                with open(filename, 'rb') as file:
                     yield file.read()
             except KeyError:
                 for key_, data in repository_iterator:
                     if key_ == key:
-                        yield self._cache(key, data)
+                        yield self.cache(key, data)
                         break
         # Consume any pending requests
         for _ in repository_iterator:
