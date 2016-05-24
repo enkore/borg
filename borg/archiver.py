@@ -4,6 +4,7 @@ from itertools import zip_longest
 from operator import attrgetter
 import argparse
 import collections
+import csv
 import functools
 import hashlib
 import inspect
@@ -992,6 +993,20 @@ class Archiver:
             repository.commit()
         print('Done.')
         return EXIT_SUCCESS
+
+    @with_repository(cache=True)
+    def do_debug_print_sizes(self, args, manifest, key, repository, cache):
+        if args.bashplotlib:
+            for _, (_, size, _) in cache.chunks.iteritems():
+                print(size)
+            return
+        sizes = collections.defaultdict(int)
+        for _, (_, size, _) in cache.chunks.iteritems():
+            sizes[size] += 1
+        writer = csv.writer(sys.stdout)
+        writer.writerow(['Chunk size (bytes)', 'Number of occurences'])
+        for size, occurences in sorted(sizes.items()):
+            writer.writerow([size, occurences])
 
     @with_repository(lock=False, manifest=False)
     def do_break_lock(self, args, repository):
@@ -2042,6 +2057,20 @@ class Archiver:
                                help='repository to use')
         subparser.add_argument('ids', metavar='IDs', nargs='+', type=str,
                                help='hex object ID(s) to delete from the repo')
+
+        debug_print_sizes_epilog = textwrap.dedent("""
+        print size of all objects in a repository (debug)
+        """)
+        subparser = subparsers.add_parser('debug-print-sizes', parents=[common_parser], add_help=False,
+                                          description=self.do_debug_print_sizes.__doc__,
+                                          epilog=debug_print_sizes_epilog,
+                                          formatter_class=argparse.RawDescriptionHelpFormatter,
+                                          help='print size of all objects in a repository (debug)')
+        subparser.set_defaults(func=self.do_debug_print_sizes)
+        subparser.add_argument('location', metavar='REPOSITORY', nargs='?', default='',
+                               type=location_validator(archive=False),
+                               help='repository to use')
+        subparser.add_argument('--bashplotlib', action='store_true')
         return parser
 
     def get_args(self, argv, cmd):
