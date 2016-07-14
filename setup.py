@@ -51,6 +51,7 @@ from setuptools.command.sdist import sdist
 
 compress_source = 'src/borg/compress.pyx'
 crypto_ll_source = 'src/borg/crypto/low_level.pyx'
+crypto_helpers = 'src/borg/crypto/_crypto_helpers.c'
 chunker_source = 'src/borg/algorithms/chunker.pyx'
 hashindex_source = 'src/borg/hashindex.pyx'
 item_source = 'src/borg/item.pyx'
@@ -578,8 +579,7 @@ ext_modules = []
 if not on_rtd:
     ext_modules += [
     Extension('borg.compress', [compress_source], libraries=['lz4'], include_dirs=include_dirs, library_dirs=library_dirs, define_macros=define_macros),
-    Extension('borg.crypto', [crypto_ll_source], libraries=crypto_libraries, include_dirs=include_dirs, library_dirs=library_dirs, define_macros=define_macros),
-    Extension('borg.crypto.low_level', [crypto_ll_source], libraries=crypto_libraries, include_dirs=include_dirs, library_dirs=library_dirs, define_macros=define_macros),
+    Extension('borg.crypto.low_level', [crypto_ll_source, crypto_helpers], libraries=crypto_libraries, include_dirs=include_dirs, library_dirs=library_dirs, define_macros=define_macros),
     Extension('borg.hashindex', [hashindex_source]),
     Extension('borg.item', [item_source]),
     Extension('borg.algorithms.chunker', [chunker_source]),
