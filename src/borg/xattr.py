@@ -210,7 +210,7 @@ elif sys.platform == 'darwin':  # pragma: darwin only
             flags = XATTR_NOFOLLOW
         _check(func(path, name, value, len(value) if value else 0, 0, flags), path)
 
-elif sys.platform.startswith('freebsd'):  # pragma: freebsd only
+elif sys.platform.startswith(('freebsd', 'netbsd')):  # pragma: freebsd only
     EXTATTR_NAMESPACE_USER = 0x0001
     libc.extattr_list_fd.argtypes = (c_int, c_int, c_char_p, c_size_t)
     libc.extattr_list_fd.restype = c_ssize_t
