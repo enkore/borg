@@ -195,6 +195,7 @@ cdef class AES256_CTR_HMAC_SHA256:
     cdef HMAC_CTX *hmac_ctx
     cdef unsigned char *mac_key
     cdef unsigned char *enc_key
+    cdef int cipher_blk_len
     cdef int iv_len, iv_len_short
     cdef int mac_len
     cdef unsigned char iv[16]  # XXX use self.iv_len or some MAX_IV_LEN?
@@ -203,6 +204,7 @@ cdef class AES256_CTR_HMAC_SHA256:
     def __init__(self, mac_key, enc_key, iv=None):
         assert isinstance(mac_key, bytes) and len(mac_key) == 32
         assert isinstance(enc_key, bytes) and len(enc_key) == 32
+        self.cipher_blk_len = 16
         self.iv_len = 16
         self.iv_len_short = 8
         self.mac_len = 32
@@ -228,7 +230,8 @@ cdef class AES256_CTR_HMAC_SHA256:
         cdef int hlen = len(header)
         cdef int aoffset = aad_offset
         cdef int alen = hlen - aoffset
-        cdef unsigned char *odata = <unsigned char *>PyMem_Malloc(hlen + self.mac_len + self.iv_len_short + ilen + 16)
+        cdef unsigned char *odata = <unsigned char *>PyMem_Malloc(hlen + self.mac_len + self.iv_len_short +
+                                                                  ilen + self.cipher_blk_len)  # play safe, 1 extra blk
         if not odata:
             raise MemoryError
         cdef int olen
@@ -277,7 +280,7 @@ cdef class AES256_CTR_HMAC_SHA256:
         cdef int hlen = header_len
         cdef int aoffset = aad_offset
         cdef int alen = hlen - aoffset
-        cdef unsigned char *odata = <unsigned char *>PyMem_Malloc(ilen + 16)
+        cdef unsigned char *odata = <unsigned char *>PyMem_Malloc(ilen + self.cipher_blk_len)  # play safe, 1 extra blk
         if not odata:
             raise MemoryError
         cdef int olen
@@ -317,7 +320,8 @@ cdef class AES256_CTR_HMAC_SHA256:
             PyBuffer_Release(&idata)
 
     def block_count(self, length):
-        return num_aes_blocks(length)
+        # number of cipher blocks needed for data of length bytes
+        return (length + self.cipher_blk_len - 1) // self.cipher_blk_len
 
     def set_iv(self, iv):
         assert isinstance(iv, bytes) and len(iv) == self.iv_len
@@ -348,6 +352,7 @@ cdef class _AEAD_BASE:
     cdef CIPHER cipher
     cdef EVP_CIPHER_CTX *ctx
     cdef unsigned char *enc_key
+    cdef int cipher_blk_len
     cdef int iv_len
     cdef int mac_len
     cdef unsigned char iv[12]  # XXX use self.iv_len or some MAX_IV_LEN?
@@ -377,7 +382,8 @@ cdef class _AEAD_BASE:
         cdef int hlen = len(header)
         cdef int aoffset = aad_offset
         cdef int alen = hlen - aoffset
-        cdef unsigned char *odata = <unsigned char *>PyMem_Malloc(hlen + self.mac_len + self.iv_len + ilen + 16)
+        cdef unsigned char *odata = <unsigned char *>PyMem_Malloc(hlen + self.mac_len + self.iv_len +
+                                                                  ilen + self.cipher_blk_len)
         if not odata:
             raise MemoryError
         cdef int olen
@@ -430,7 +436,7 @@ cdef class _AEAD_BASE:
         cdef int hlen = header_len
         cdef int aoffset = aad_offset
         cdef int alen = hlen - aoffset
-        cdef unsigned char *odata = <unsigned char *>PyMem_Malloc(ilen + 16)
+        cdef unsigned char *odata = <unsigned char *>PyMem_Malloc(ilen + self.cipher_blk_len)
         if not odata:
             raise MemoryError
         cdef int olen
@@ -473,7 +479,7 @@ cdef class _AEAD_BASE:
 
     def block_count(self, length):
         # number of cipher blocks needed for data of length bytes
-        raise NotImplemented
+        return (length + self.cipher_blk_len - 1) // self.cipher_blk_len
 
     def set_iv(self, iv):
         assert isinstance(iv, bytes) and len(iv) == self.iv_len
@@ -500,13 +506,15 @@ cdef class _AEAD_BASE:
 
 
 cdef class _AES_BASE(_AEAD_BASE):
-    def block_count(self, length):
-        return num_aes_blocks(length)
+    def __init__(self, mac_key, enc_key, iv=None):
+        self.cipher_blk_len = 16
+        super().__init__(mac_key, enc_key, iv=iv)
 
 
 cdef class _CHACHA_BASE(_AEAD_BASE):
-    def block_count(self, length):
-        return (length + 63) // 64
+    def __init__(self, mac_key, enc_key, iv=None):
+        self.cipher_blk_len = 64
+        super().__init__(mac_key, enc_key, iv=iv)
 
 
 cdef class AES256_GCM(_AES_BASE):
