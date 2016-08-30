@@ -11,7 +11,7 @@ from ..crypto.key import Passphrase, PasswordRetriesExceeded, bin_to_hex
 from ..crypto.key import PlaintextKey, PassphraseKey, KeyfileKey, RepoKey, Blake2KeyfileKey, Blake2RepoKey, \
     AuthenticatedKey
 from ..crypto.key import TAMRequiredError, TAMInvalid, TAMUnsupportedSuiteError, UnsupportedManifestError
-from ..crypto.low_level import bytes_to_long, num_aes_blocks
+from ..crypto.low_level import bytes_to_long
 from ..crypto.low_level import IntegrityError as IntegrityErrorBase
 from ..helpers import IntegrityError
 from ..helpers import Location
@@ -123,7 +123,7 @@ class TestKey:
         assert key.extract_nonce(manifest2) == 1
         iv = key.extract_nonce(manifest)
         key2 = KeyfileKey.detect(self.MockRepository(), manifest)
-        assert bytes_to_long(key2.cipher.next_iv(), 8) >= iv + num_aes_blocks(len(manifest) - KeyfileKey.PAYLOAD_OVERHEAD)
+        assert bytes_to_long(key2.cipher.next_iv(), 8) >= iv + key2.cipher.block_count(len(manifest) - KeyfileKey.PAYLOAD_OVERHEAD)
         # Key data sanity check
         assert len({key2.id_key, key2.enc_key, key2.enc_hmac_key}) == 3
         assert key2.chunk_seed != 0
@@ -196,7 +196,7 @@ class TestKey:
         assert key.extract_nonce(manifest2) == 1
         iv = key.extract_nonce(manifest)
         key2 = PassphraseKey.detect(self.MockRepository(), manifest)
-        assert bytes_to_long(key2.cipher.next_iv(), 8) == iv + num_aes_blocks(len(manifest) - PassphraseKey.PAYLOAD_OVERHEAD)
+        assert bytes_to_long(key2.cipher.next_iv(), 8) == iv + key2.cipher.block_count(len(manifest) - PassphraseKey.PAYLOAD_OVERHEAD)
         assert key.id_key == key2.id_key
         assert key.enc_hmac_key == key2.enc_hmac_key
         assert key.enc_key == key2.enc_key
