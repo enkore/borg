@@ -120,7 +120,7 @@ class TestNonceManager:
 
         # spans reservation boundary
         manager.ensure_reservation(64)
-        cipher.expect_iv_and_advance(0x2063, 0x2000 + 19 + 13 + 19 + 16 + 64) # XXX FIX
+        cipher.expect_iv_and_advance(0x2063, 0x2000 + 19 + 13 + 19 + 16 + 64)
         assert self.cache_nonce() == "00000000000020c3"
         assert self.repository.next_free == 0x20c3
 
