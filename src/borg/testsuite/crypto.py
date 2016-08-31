@@ -1,7 +1,7 @@
 from binascii import hexlify, unhexlify
 
 from ..crypto.low_level import AES256_CTR_HMAC_SHA256, AES256_GCM, AES256_OCB, CHACHA20_POLY1305, UNENCRYPTED, \
-                     IntegrityError, hmac_sha256, blake2b_256, openssl10
+                               IntegrityError, blake2b_256, hmac_sha256, hmac_sha512, hmac_blake2b512, openssl10
 from ..crypto.low_level import bytes_to_long, bytes_to_int, long_to_bytes, bytes16_to_int, int_to_bytes16, increment_iv
 from ..crypto.low_level import hkdf_hmac_sha512
 
@@ -295,3 +295,39 @@ class CryptoTestCase(BaseTestCase):
 
         okm = hkdf_hmac_sha512(ikm, salt, info, l)
         assert okm == bytes.fromhex('1407d46013d98bc6decefcfee55f0f90b0c7f63d68eb1a80eaf07e953cfc0a3a5240a155d6e4daa965bb')
+
+    def test_hmac_sha512(self):
+        # RFC 4231 test vectors
+        key = b'\x0b' * 20
+        # Also test that this works with memory views
+        data = memoryview(unhexlify('4869205468657265'))
+        hmac = unhexlify('87aa7cdea5ef619d4ff0b4241a1d6cb02379f4e2ce4ec2787ad0b30545e17cde'
+                         'daa833b7d6b8a702038b274eaea3f4e4be9d914eeb61f1702e696c203a126854')
+        assert hmac_sha512(key, data) == hmac
+        key = unhexlify('4a656665')
+        data = unhexlify('7768617420646f2079612077616e7420'
+                         '666f72206e6f7468696e673f')
+        hmac = unhexlify('164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea250554'
+                         '9758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737')
+        assert hmac_sha512(key, data) == hmac
+        key = b'\xaa' * 20
+        data = b'\xdd' * 50
+        hmac = unhexlify('fa73b0089d56a284efb0f0756c890be9b1b5dbdd8ee81a3655f83e33b2279d39'
+                         'bf3e848279a722c806b485a47e67c807b946a337bee8942674278859e13292fb')
+        assert hmac_sha512(key, data) == hmac
+        key = unhexlify('0102030405060708090a0b0c0d0e0f10'
+                        '111213141516171819')
+        data = b'\xcd' * 50
+        hmac = unhexlify('b0ba465637458c6990e5a8c5f61d4af7e576d97ff94b872de76f8050361ee3db'
+                         'a91ca5c11aa25eb4d679275cc5788063a5f19741120c4f2de2adebeb10a298dd')
+        assert hmac_sha512(key, data) == hmac
+
+    def test_hmac_blake2b512(self):
+        if not openssl10:
+            # XXX would be nice to have officially documented test vectors to use here
+            key = b'\x00' * 64
+            # Also test that this works with memory views
+            data = memoryview(unhexlify('616263'))
+            hmac = unhexlify('c23d7eb81509be346bab43f60e2b889e86301b0c029b3843ebbccac591a047e7'
+                             '04566cddda2f068c3ca504182a25e11ca9933911cd696eebe0f1df7ca8d98158')
+            assert hmac_blake2b512(key, data) == hmac

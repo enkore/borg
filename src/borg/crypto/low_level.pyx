@@ -89,7 +89,9 @@ cdef extern from "openssl/evp.h":
     int EVP_CTRL_GCM_SET_TAG
     int EVP_CTRL_GCM_SET_IVLEN
 
-    EVP_MD *EVP_sha256() nogil
+    const EVP_MD *EVP_sha256() nogil
+    const EVP_MD *EVP_sha512() nogil
+    const EVP_MD *EVP_blake2b512() nogil
 
     EVP_CIPHER_CTX *EVP_CIPHER_CTX_new()
     void EVP_CIPHER_CTX_free(EVP_CIPHER_CTX *a)
@@ -124,6 +126,8 @@ cdef extern from "_crypto_helpers.h":
 
     const EVP_CIPHER *EVP_aes_256_ocb()  # dummy
     const EVP_CIPHER *EVP_chacha20_poly1305()  # dummy
+
+    const EVP_MD *EVP_blake2b512() nogil  # dummy
 
 
 openssl10 = OPENSSL_VERSION_NUMBER < 0x10100000
@@ -712,6 +716,22 @@ def hmac_sha256(key, data):
     return md
 
 
+def hmac_sha512(key, data):
+    md = bytes(64)
+    cdef Py_buffer data_buf = ro_buffer(data)
+    cdef const unsigned char *key_ptr = key
+    cdef int key_len = len(key)
+    cdef unsigned char *md_ptr = md
+    try:
+        with nogil:
+            rc = HMAC(EVP_sha512(), key_ptr, key_len, <const unsigned char*> data_buf.buf, data_buf.len, md_ptr, NULL)
+        if rc != md_ptr:
+            raise CryptoError('HMAC(EVP_sha512) failed')
+    finally:
+        PyBuffer_Release(&data_buf)
+    return md
+
+
 cdef blake2b_update_from_buffer(blake2b_state *state, obj):
     cdef Py_buffer buf = ro_buffer(obj)
     try:
@@ -745,7 +765,24 @@ def blake2b_256(key, data):
     rc = blake2b_final(&state, md_ptr, 32)
     if rc == -1:
         raise Exception('blake2b_final() failed')
+    return md
 
+
+def hmac_blake2b512(key, data):
+    # note: using hmac with blake2b is a bit stupid as blake2b itself can be
+    # used as a keyed hash, but OpenSSL has no public API to use it like that.
+    md = bytes(64)
+    cdef Py_buffer data_buf = ro_buffer(data)
+    cdef const unsigned char *key_ptr = key
+    cdef int key_len = len(key)
+    cdef unsigned char *md_ptr = md
+    try:
+        with nogil:
+            rc = HMAC(EVP_blake2b512(), key_ptr, key_len, <const unsigned char*> data_buf.buf, data_buf.len, md_ptr, NULL)
+        if rc != md_ptr:
+            raise CryptoError('HMAC(EVP_blake2b) failed')
+    finally:
+        PyBuffer_Release(&data_buf)
     return md
 
 
