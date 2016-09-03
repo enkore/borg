@@ -1213,9 +1213,7 @@ class ProgressIndicatorEndless:
 
 def sysinfo():
     info = []
-    info.append('Platform: %s' % (' '.join(platform.uname()), ))
-    if sys.platform.startswith('linux'):
-        info.append('Linux: %s %s %s' % platform.linux_distribution())
+    info.append('Platform: %s' % ' '.join(platform.uname()))
     info.append('Borg: %s  Python: %s %s' % (borg_version, platform.python_implementation(), platform.python_version()))
     info.append('PID: %d  CWD: %s' % (os.getpid(), os.getcwd()))
     info.append('sys.argv: %r' % sys.argv)
