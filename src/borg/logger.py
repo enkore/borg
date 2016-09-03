@@ -79,7 +79,7 @@ def setup_logging(stream=None, conf_fname=None, env_var='BORG_LOGGING_CONF', lev
                 logging.config.fileConfig(f)
             configured = True
             logger = logging.getLogger(__name__)
-            logger.debug('using logging configuration read from "{0}"'.format(conf_fname))
+            logger.debug('using logging configuration read from "%s"', conf_fname)
             warnings.showwarning = _log_warning
             return None
         except Exception as err:  # XXX be more precise
@@ -97,7 +97,7 @@ def setup_logging(stream=None, conf_fname=None, env_var='BORG_LOGGING_CONF', lev
     configured = True
     logger = logging.getLogger(__name__)
     if err_msg:
-        logger.warning('setup_logging for "{0}" failed with "{1}".'.format(conf_fname, err_msg))
+        logger.warning('setup_logging for "%s" failed with "%s".', conf_fname, err_msg)
     logger.debug('using builtin fallback logging configuration')
     warnings.showwarning = _log_warning
     return handler

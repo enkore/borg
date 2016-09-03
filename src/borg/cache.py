@@ -13,7 +13,7 @@ logger = create_logger()
 from .hashindex import ChunkIndex, ChunkIndexEntry
 from .helpers import Error
 from .helpers import get_cache_dir
-from .helpers import decode_dict, int_to_bigint, bigint_to_int, bin_to_hex
+from .helpers import int_to_bigint, bigint_to_int, bin_to_hex
 from .helpers import format_file_size
 from .helpers import yes
 from .item import Item, ArchiveItem
@@ -360,15 +360,15 @@ Chunk index:    {0.total_unique_chunks:20d} {0.total_chunks:20d}"""
             """bring old cache dirs into the desired state (cleanup and adapt)"""
             try:
                 os.unlink(os.path.join(self.path, 'chunks.archive'))
-            except:
+            except OSError:
                 pass
             try:
                 os.unlink(os.path.join(self.path, 'chunks.archive.tmp'))
-            except:
+            except OSError:
                 pass
             try:
                 os.mkdir(archive_path)
-            except:
+            except OSError:
                 pass
 
         self.begin_txn()

@@ -228,7 +228,7 @@ def prune_within(archives, within):
     return [a for a in archives if a.ts > target]
 
 
-def prune_split(archives, pattern, n, skip=[]):
+def prune_split(archives, pattern, n, skip=()):
     last = None
     keep = []
     if n == 0:
@@ -444,7 +444,7 @@ class FnmatchPattern(PatternBase):
         self.regex = re.compile(translate(self.pattern))
 
     def _match(self, path):
-        return (self.regex.match(path + os.path.sep) is not None)
+        return self.regex.match(path + os.path.sep) is not None
 
 
 class ShellPattern(PatternBase):
@@ -465,7 +465,7 @@ class ShellPattern(PatternBase):
         self.regex = re.compile(shellpattern.translate(self.pattern))
 
     def _match(self, path):
-        return (self.regex.match(path + os.path.sep) is not None)
+        return self.regex.match(path + os.path.sep) is not None
 
 
 class RegexPattern(PatternBase):
@@ -482,7 +482,7 @@ class RegexPattern(PatternBase):
         if os.path.sep != '/':
             path = path.replace(os.path.sep, '/')
 
-        return (self.regex.search(path) is not None)
+        return self.regex.search(path) is not None
 
 
 _PATTERN_STYLES = set([
@@ -614,7 +614,7 @@ def partial_format(format, mapping):
 
     Does not support attribute access, indexing and ![rsa] conversions
     """
-    for key, value in mapping.items():
+    for key in mapping:
         key = re.escape(key)
         format = re.sub(r'(?<!\{)((\{%s\})|(\{%s:[^\}]*\}))' % (key, key),
                         lambda match: match.group(1).format_map(mapping),
@@ -1607,7 +1607,7 @@ class CompressionDecider1:
                     for line in clean_lines(file):
                         try:
                             compr_spec, fn_pattern = line.split(':', 1)
-                        except:
+                        except ValueError:
                             continue
                         self.matcher.add([parse_pattern(fn_pattern)], CompressionSpec(compr_spec))
                 finally:

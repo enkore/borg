@@ -17,7 +17,7 @@ class PropDict:
     - be safe against typos in key names: check against VALID_KEYS
     - when setting a value: check type of value
     """
-    VALID_KEYS = None  # override with <set of str> in child class
+    VALID_KEYS = {}  # set of allowed keys (as strings)
 
     __slots__ = ("_dict", )  # avoid setting attributes not supported by properties
 

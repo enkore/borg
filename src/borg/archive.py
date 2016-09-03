@@ -29,8 +29,8 @@ from .helpers import uid2user, user2uid, gid2group, group2gid
 from .helpers import parse_timestamp, to_localtime
 from .helpers import format_time, format_timedelta, format_file_size, file_status
 from .helpers import safe_encode, safe_decode, make_path_safe, remove_surrogates
-from .helpers import decode_dict, StableDict
-from .helpers import int_to_bigint, bigint_to_int, bin_to_hex
+from .helpers import StableDict
+from .helpers import bin_to_hex
 from .helpers import ProgressIndicatorPercent, log_multi
 from .helpers import PathPrefixPattern, FnmatchPattern
 from .helpers import consume
@@ -632,7 +632,7 @@ Number of files: {0.stats.nfiles}'''.format(
             except KeyError:
                 cid = bin_to_hex(id)
                 raise ChunksIndexError(cid)
-            except Repository.ObjectNotFound as e:
+            except Repository.ObjectNotFound:
                 # object not in repo - strange, but we wanted to delete it anyway.
                 if not forced:
                     raise
@@ -653,7 +653,7 @@ Number of files: {0.stats.nfiles}'''.format(
                     for item in unpacker:
                         item = Item(internal_dict=item)
                         if 'chunks' in item:
-                            for chunk_id, size, csize in item.chunks:
+                            for chunk_id, *_ in item.chunks:
                                 chunk_decref(chunk_id, stats)
                 except (TypeError, ValueError):
                     # if items metadata spans multiple chunks and one chunk got dropped somehow,
@@ -761,19 +761,18 @@ Number of files: {0.stats.nfiles}'''.format(
             if self.checkpoint_interval and time.time() - self.last_checkpoint > self.checkpoint_interval:
                 from_chunk, part_number = write_part(item, from_chunk, part_number)
                 self.last_checkpoint = time.time()
-        else:
-            if part_number > 1:
-                if item.chunks[from_chunk:]:
-                    # if we already have created a part item inside this file, we want to put the final
-                    # chunks (if any) into a part item also (so all parts can be concatenated to get
-                    # the complete file):
-                    from_chunk, part_number = write_part(item, from_chunk, part_number)
-                    self.last_checkpoint = time.time()
+        if part_number > 1:
+            if item.chunks[from_chunk:]:
+                # if we already have created a part item inside this file, we want to put the final
+                # chunks (if any) into a part item also (so all parts can be concatenated to get
+                # the complete file):
+                from_chunk, part_number = write_part(item, from_chunk, part_number)
+                self.last_checkpoint = time.time()
 
-                # if we created part files, we have referenced all chunks from the part files,
-                # but we also will reference the same chunks also from the final, complete file:
-                for chunk in item.chunks:
-                    cache.chunk_incref(chunk.id, stats)
+            # if we created part files, we have referenced all chunks from the part files,
+            # but we also will reference the same chunks also from the final, complete file:
+            for chunk in item.chunks:
+                cache.chunk_incref(chunk.id, stats)
 
     def process_stdin(self, path, cache):
         uid, gid = 0, 0
@@ -1036,7 +1035,7 @@ class ArchiveChecker:
         count = len(self.chunks)
         errors = 0
         pi = ProgressIndicatorPercent(total=count, msg="Verifying data %6.2f%%", step=0.01)
-        for chunk_id, (refcount, *_) in self.chunks.iteritems():
+        for chunk_id, _ in self.chunks.iteritems():
             pi.show()
             try:
                 encrypted_data = self.repository.get(chunk_id)
@@ -1047,7 +1046,7 @@ class ArchiveChecker:
                 continue
             try:
                 _chunk_id = None if chunk_id == Manifest.MANIFEST_ID else chunk_id
-                _, data = self.key.decrypt(_chunk_id, encrypted_data)
+                self.key.decrypt(_chunk_id, encrypted_data)
             except IntegrityError as integrity_error:
                 self.error_found = True
                 errors += 1
@@ -1222,7 +1221,7 @@ class ArchiveChecker:
                                 yield Item(internal_dict=item)
                             else:
                                 report('Did not get expected metadata dict when unpacking item metadata', chunk_id, i)
-                    except RobustUnpacker.UnpackerCrashed as err:
+                    except RobustUnpacker.UnpackerCrashed:
                         report('Unpacker crashed while unpacking item metadata, trying to resync...', chunk_id, i)
                         unpacker.resync()
                     except Exception:
@@ -1489,7 +1488,7 @@ class ArchiveRecreater:
         # So just copy these over
         partial_chunks = target.recreate_partial_chunks
         target.recreate_partial_chunks = None
-        for chunk_id, size, csize in partial_chunks:
+        for chunk_id, *_ in partial_chunks:
             self.seen_chunks.add(chunk_id)
         logger.debug('Copied %d chunks from a partially processed item', len(partial_chunks))
         return partial_chunks

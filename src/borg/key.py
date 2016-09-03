@@ -3,7 +3,7 @@ import getpass
 import os
 import sys
 import textwrap
-from binascii import a2b_base64, b2a_base64, hexlify, unhexlify
+from binascii import a2b_base64, b2a_base64, hexlify
 from hashlib import sha256, pbkdf2_hmac
 from hmac import compare_digest
 
@@ -13,8 +13,8 @@ from .logger import create_logger
 logger = create_logger()
 
 from .constants import *  # NOQA
-from .compress import Compressor, get_compressor
-from .crypto import AES, bytes_to_long, long_to_bytes, bytes_to_int, num_aes_blocks, hmac_sha256
+from .compress import Compressor
+from .crypto import AES, bytes_to_long, bytes_to_int, num_aes_blocks, hmac_sha256
 from .helpers import Chunk
 from .helpers import Error, IntegrityError
 from .helpers import yes
@@ -260,8 +260,7 @@ class Passphrase(str):
                     print('Passphrases do not match', file=sys.stderr)
             else:
                 print('Passphrase must not be blank', file=sys.stderr)
-        else:
-            raise PasswordRetriesExceeded
+        raise PasswordRetriesExceeded
 
     def __repr__(self):
         return '<Passphrase "***hidden***">'
@@ -306,8 +305,7 @@ class PassphraseKey(AESKeyBase):
                 return key
             except IntegrityError:
                 passphrase = Passphrase.getpass(prompt)
-        else:
-            raise PasswordRetriesExceeded
+        raise PasswordRetriesExceeded
 
     def change_passphrase(self):
         class ImmutablePassphraseError(Error):

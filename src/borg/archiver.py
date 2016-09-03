@@ -562,9 +562,9 @@ class Archiver:
         def compare_content(path, item1, item2):
             if contents_changed(item1, item2):
                 if item1.get('deleted'):
-                    return ('added {:>13}'.format(format_file_size(sum_chunk_size(item2))))
+                    return 'added {:>13}'.format(format_file_size(sum_chunk_size(item2)))
                 elif item2.get('deleted'):
-                    return ('removed {:>11}'.format(format_file_size(sum_chunk_size(item1))))
+                    return 'removed {:>11}'.format(format_file_size(sum_chunk_size(item1)))
                 else:
                     chunk_ids1 = {c.id for c in item1.chunks}
                     chunk_ids2 = {c.id for c in item2.chunks}
@@ -572,8 +572,8 @@ class Archiver:
                     removed_ids = chunk_ids1 - chunk_ids2
                     added = sum_chunk_size(item2, added_ids)
                     removed = sum_chunk_size(item1, removed_ids)
-                    return ('{:>9} {:>9}'.format(format_file_size(added, precision=1, sign=True),
-                                                 format_file_size(-removed, precision=1, sign=True)))
+                    return '{:>9} {:>9}'.format(format_file_size(added, precision=1, sign=True),
+                                                format_file_size(-removed, precision=1, sign=True))
 
         def compare_directory(item1, item2):
             if item2.get('deleted') and not item1.get('deleted'):
@@ -917,14 +917,14 @@ class Archiver:
                 if archive in to_delete:
                     if args.dry_run:
                         if args.output_list:
-                            list_logger.info('Would prune:     %s' % format_archive(archive))
+                            list_logger.info('Would prune:     %s', format_archive(archive))
                     else:
                         if args.output_list:
-                            list_logger.info('Pruning archive: %s' % format_archive(archive))
+                            list_logger.info('Pruning archive: %s', format_archive(archive))
                         Archive(repository, key, manifest, archive.name, cache).delete(stats, forced=args.forced)
                 else:
                     if args.output_list:
-                        list_logger.info('Keeping archive: %s' % format_archive(archive))
+                        list_logger.info('Keeping archive: %s', format_archive(archive))
             if to_delete and not args.dry_run:
                 manifest.write()
                 repository.commit(save_space=args.save_space)
@@ -2446,13 +2446,13 @@ def main():  # pragma: no cover
         rc_logger = logging.getLogger('borg.output.show-rc')
         exit_msg = 'terminating with %s status, rc %d'
         if exit_code == EXIT_SUCCESS:
-            rc_logger.info(exit_msg % ('success', exit_code))
+            rc_logger.info(exit_msg, 'success', exit_code)
         elif exit_code == EXIT_WARNING:
-            rc_logger.warning(exit_msg % ('warning', exit_code))
+            rc_logger.warning(exit_msg, 'warning', exit_code)
         elif exit_code == EXIT_ERROR:
-            rc_logger.error(exit_msg % ('error', exit_code))
+            rc_logger.error(exit_msg,'error', exit_code)
         else:
-            rc_logger.error(exit_msg % ('abnormal', exit_code or 666))
+            rc_logger.error(exit_msg, 'abnormal', exit_code or 666)
     sys.exit(exit_code)
 
 
