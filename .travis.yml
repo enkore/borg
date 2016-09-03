@@ -24,7 +24,7 @@ matrix:
         - python: 3.4
           os: linux
           dist: trusty
-          env: TOXENV=flake8
+          env: TOXENV=flake8,pylint
         - language: generic
           os: osx
           osx_image: xcode6.4
