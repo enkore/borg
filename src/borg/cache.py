@@ -311,7 +311,12 @@ Chunk index:    {0.total_unique_chunks:20d} {0.total_chunks:20d}"""
                 _, data = key.decrypt(item_id, chunk)
                 chunk_idx.add(item_id, 1, len(data), len(chunk))
                 unpacker.feed(data)
-                chunk_idx.add_items(unpacker)
+                for item in unpacker:
+                    if not isinstance(item, dict):
+                        raise ValueError('Error: Did not get expected metadata dict - archive corrupted!')
+                    for chunk_id, size, csize in item.get(b'chunks', {}):
+                        chunk_idx.add(chunk_id, 1, size, csize)
+                #chunk_idx.add_items(unpacker)
             if self.do_cache:
                 fn = mkpath(archive_id)
                 fn_tmp = mkpath(archive_id, suffix='.tmp')
@@ -323,10 +328,11 @@ Chunk index:    {0.total_unique_chunks:20d} {0.total_chunks:20d}"""
                     os.rename(fn_tmp, fn)
             return chunk_idx
 
-        def lookup_name(archive_id):
-            for info in self.manifest.archives.list():
-                if info.id == archive_id:
-                    return info.name
+        def sorted_archive_ids(archive_ids):
+            all_archives = self.manifest.archives.list(sort_by='ts')
+            for archive_info in all_archives:
+                if archive_info.id in archive_ids:
+                    yield archive_info.name, archive_info.id
 
         def create_master_idx(chunk_idx):
             logger.info('Synchronizing chunks cache...')
@@ -340,8 +346,7 @@ Chunk index:    {0.total_unique_chunks:20d} {0.total_chunks:20d}"""
             cleanup_outdated(cached_ids - archive_ids)
             if archive_ids:
                 chunk_idx = None
-                for archive_id in archive_ids:
-                    archive_name = lookup_name(archive_id)
+                for archive_name, archive_id in reversed(list(sorted_archive_ids(archive_ids))):
                     if archive_id in cached_ids:
                         archive_chunk_idx_path = mkpath(archive_id)
                         logger.info("Reading cached archive chunk index for %s ..." % archive_name)
