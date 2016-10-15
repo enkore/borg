@@ -311,14 +311,7 @@ Chunk index:    {0.total_unique_chunks:20d} {0.total_chunks:20d}"""
                 _, data = key.decrypt(item_id, chunk)
                 chunk_idx.add(item_id, 1, len(data), len(chunk))
                 unpacker.feed(data)
-                for item in unpacker:
-                    if not isinstance(item, dict):
-                        logger.error('Error: Did not get expected metadata dict - archive corrupted!')
-                        continue
-                    item = Item(internal_dict=item)
-                    if 'chunks' in item:
-                        for chunk_id, size, csize in item.chunks:
-                            chunk_idx.add(chunk_id, 1, size, csize)
+                chunk_idx.add_items(unpacker)
             if self.do_cache:
                 fn = mkpath(archive_id)
                 fn_tmp = mkpath(archive_id, suffix='.tmp')

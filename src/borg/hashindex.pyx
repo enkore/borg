@@ -8,7 +8,7 @@ from libc.stdint cimport uint32_t, UINT32_MAX, uint64_t
 from libc.errno cimport errno
 from cpython.exc cimport PyErr_SetFromErrnoWithFilename
 
-API_VERSION = 4
+API_VERSION = 5
 
 
 cdef extern from "_hashindex.c":
@@ -313,6 +313,13 @@ cdef class ChunkIndex(IndexBase):
             csize += <uint64_t> _le32toh(values[2]) * _le32toh(values[0])
 
         return size, csize, unique_size, unique_csize, unique_chunks, chunks
+
+    def add_items(self, items):
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError('Error: Did not get expected metadata dict - archive corrupted!')
+            for chunk_id, size, csize in item.get(b'chunks', {}):
+                self.add(chunk_id, 1, size, csize)
 
     def add(self, key, refs, size, csize):
         assert len(key) == self.key_size
