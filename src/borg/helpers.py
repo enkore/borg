@@ -41,6 +41,7 @@ from . import __version_tuple__ as borg_version_tuple
 from . import hashindex
 from .algorithms import chunker
 from .constants import *  # NOQA
+from .crypto import IntegrityError as IntegrityErrorBase
 
 
 '''
@@ -88,7 +89,7 @@ class ErrorWithTraceback(Error):
     traceback = True
 
 
-class IntegrityError(ErrorWithTraceback):
+class IntegrityError(ErrorWithTraceback, IntegrityErrorBase):
     """Data integrity error: {}"""
 
 

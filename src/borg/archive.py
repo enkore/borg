@@ -25,6 +25,7 @@ from .cache import ChunkListEntry
 from .crypto.key import key_factory
 from .compress import Compressor, CompressionSpec
 from .constants import *  # NOQA
+from .crypto import IntegrityError as IntegrityErrorBase
 from .hashindex import ChunkIndex, ChunkIndexEntry
 from .helpers import Manifest
 from .helpers import hardlinkable
@@ -1153,7 +1154,7 @@ class ArchiveChecker:
         else:
             try:
                 self.manifest, _ = Manifest.load(repository, key=self.key)
-            except IntegrityError as exc:
+            except IntegrityErrorBase as exc:
                 logger.error('Repository manifest is corrupted: %s', exc)
                 self.error_found = True
                 del self.chunks[Manifest.MANIFEST_ID]
@@ -1216,11 +1217,11 @@ class ArchiveChecker:
                 chunk_id = chunk_ids_revd.pop(-1)  # better efficiency
                 try:
                     encrypted_data = next(chunk_data_iter)
-                except (Repository.ObjectNotFound, IntegrityError) as err:
+                except (Repository.ObjectNotFound, IntegrityErrorBase) as err:
                     self.error_found = True
                     errors += 1
                     logger.error('chunk %s: %s', bin_to_hex(chunk_id), err)
-                    if isinstance(err, IntegrityError):
+                    if isinstance(err, IntegrityErrorBase):
                         defect_chunks.append(chunk_id)
                     # as the exception killed our generator, make a new one for remaining chunks:
                     if chunk_ids_revd:
@@ -1230,7 +1231,7 @@ class ArchiveChecker:
                     _chunk_id = None if chunk_id == Manifest.MANIFEST_ID else chunk_id
                     try:
                         self.key.decrypt(_chunk_id, encrypted_data)
-                    except IntegrityError as integrity_error:
+                    except IntegrityErrorBase as integrity_error:
                         self.error_found = True
                         errors += 1
                         logger.error('chunk %s, integrity error: %s', bin_to_hex(chunk_id), integrity_error)
@@ -1259,7 +1260,7 @@ class ArchiveChecker:
                         encrypted_data = self.repository.get(defect_chunk)
                         _chunk_id = None if defect_chunk == Manifest.MANIFEST_ID else defect_chunk
                         self.key.decrypt(_chunk_id, encrypted_data)
-                    except IntegrityError:
+                    except IntegrityErrorBase:
                         # failed twice -> get rid of this chunk
                         del self.chunks[defect_chunk]
                         self.repository.delete(defect_chunk)
@@ -1300,7 +1301,7 @@ class ArchiveChecker:
             cdata = self.repository.get(chunk_id)
             try:
                 data = self.key.decrypt(chunk_id, cdata)
-            except IntegrityError as exc:
+            except IntegrityErrorBase as exc:
                 logger.error('Skipping corrupted chunk: %s', exc)
                 self.error_found = True
                 continue
