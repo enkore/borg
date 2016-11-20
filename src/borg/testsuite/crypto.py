@@ -1,7 +1,7 @@
 from binascii import hexlify, unhexlify
 
 from ..crypto.low_level import AES256_CTR_HMAC_SHA256, AES256_GCM, AES256_OCB, CHACHA20_POLY1305, UNENCRYPTED, \
-    IntegrityError, blake2b_256, hmac_sha256, hmac_sha512, hmac_blake2b512, openssl10
+    IntegrityError, blake2b_256, hmac_sha256, hmac_sha512, openssl10
 from ..crypto.low_level import bytes_to_long, bytes_to_int, long_to_bytes, bytes16_to_int, int_to_bytes16
 from ..crypto.low_level import hkdf_hmac_sha512
 
@@ -308,13 +308,3 @@ class CryptoTestCase(BaseTestCase):
         hmac = unhexlify('b0ba465637458c6990e5a8c5f61d4af7e576d97ff94b872de76f8050361ee3db'
                          'a91ca5c11aa25eb4d679275cc5788063a5f19741120c4f2de2adebeb10a298dd')
         assert hmac_sha512(key, data) == hmac
-
-    def test_hmac_blake2b512(self):
-        if not openssl10:
-            # XXX would be nice to have officially documented test vectors to use here
-            key = b'\x00' * 64
-            # Also test that this works with memory views
-            data = memoryview(unhexlify('616263'))
-            hmac = unhexlify('c23d7eb81509be346bab43f60e2b889e86301b0c029b3843ebbccac591a047e7'
-                             '04566cddda2f068c3ca504182a25e11ca9933911cd696eebe0f1df7ca8d98158')
-            assert hmac_blake2b512(key, data) == hmac
