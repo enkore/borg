@@ -669,7 +669,7 @@ class LoggedIO:
                 if not os.path.exists(dirname):
                     os.mkdir(dirname)
                     sync_dir(os.path.join(self.path, 'data'))
-            self._write_fd = open(self.segment_filename(self.segment), 'ab')
+            self._write_fd = open(self.segment_filename(self.segment), 'xb')
             self._write_fd.write(MAGIC)
             self.offset = MAGIC_LEN
         return self._write_fd
