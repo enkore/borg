@@ -27,7 +27,7 @@ from .archive import Archive, ArchiveChecker, ArchiveRecreater, Statistics, is_s
 from .archive import BackupOSError, CHUNKER_PARAMS
 from .cache import Cache
 from .constants import *  # NOQA
-from .helpers import EXIT_SUCCESS, EXIT_WARNING, EXIT_ERROR
+from .helpers import EXIT_SUCCESS, EXIT_WARNING, EXIT_ERROR, StableDict
 from .helpers import Error, NoManifestError
 from .helpers import location_validator, archivename_validator, ChunkerParams, CompressionSpec
 from .helpers import PrefixSpec, SortBySpec, HUMAN_SORT_KEYS
@@ -182,7 +182,59 @@ class Archiver:
     @with_repository(create=True, exclusive=True, manifest=False)
     def do_init(self, args, repository):
         """Initialize an empty repository"""
-        logger.info('Initializing repository at "%s"' % args.location.canonical_path())
+        guide = args.encryption is None and not args.append_only
+        if not guide:
+            args.encryption = args.encryption or 'repokey'
+            logger.info('Initializing repository at "%s"' % args.location.canonical_path())
+        else:
+            import platform
+            is_64bits = '64' in platform.machine()
+            is_arm = 'arm' in platform.machine().lower()
+            recommend_blake = is_64bits and not is_arm
+            print('Borg repositories can be encrypted to protect your data from prying eyes.')
+            print('The encryption used is authenticated, in other words, it also ensures that')
+            print('data is not modified without Borg noticing it.')
+            print()
+            print('If you don\'t need encryption, but still want authentication, use the')
+            print('"authenticated" mode.')
+            print()
+            print('You can decide between key file modes, where a key file is on this computer,')
+            print('and repokey modes, where the encrypted keys are stored in the repository.')
+            print('It is not possible to change the mode once the repository is created.')
+            if recommend_blake:
+                print()
+                print('Based on the hardware of this machine (%s), we recommend a blake2 mode,' % platform.machine())
+                print('unless you need compatibility with Borg 1.0.x.')
+                print('If you don\'t want encryption the "authenticated" mode is likely faster')
+                print('on your system than "unencrypted" mode.')
+            print()
+            print('The available modes are:')
+            options = StableDict({
+                1: ('unencrypted', 'using SHA-256'),
+                2: ('repokey', 'using SHA-256'),
+                3: ('keyfile', 'using SHA-256'),
+                4: ('authenticated', 'using BLAKE2b (Borg 1.1+ required for access)'),
+                5: ('repokey-blake2', 'using BLAKE2b (Borg 1.1+ required for access)'),
+                6: ('keyfile-blake2', 'using BLAKE2b (Borg 1.1+ required for access)'),
+            })
+            for number, (name, description) in options.items():
+                print(' (%d) %s, %s' % (number, name, description))
+            while True:
+                try:
+                    choice = input('Your choice (number or name): ').strip().lower()
+                    choice, _ = options[int(choice)]
+                except (ValueError, KeyError):
+                    for name, _ in options.values():
+                        if name == choice:
+                            break
+                    else:
+                        print('Didn\'t recognize "%s".' % choice)
+                        continue
+                except (EOFError, KeyboardInterrupt):
+                    repository.destroy()
+                    return EXIT_WARNING
+                break
+            args.encryption = choice
         try:
             key = key_creator(repository, args)
         except (EOFError, KeyboardInterrupt):
@@ -1628,7 +1680,7 @@ class Archiver:
                                help='repository to create')
         subparser.add_argument('-e', '--encryption', dest='encryption',
                                choices=('none', 'keyfile', 'repokey', 'keyfile-blake2', 'repokey-blake2', 'authenticated'),
-                               default='repokey',
+                               default=None,
                                help='select encryption key mode (default: "%(default)s")')
         subparser.add_argument('-a', '--append-only', dest='append_only', action='store_true',
                                help='create an append-only mode repository')
