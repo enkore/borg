@@ -73,9 +73,8 @@ class TestKey:
         KeyfileKey,
         PlaintextKey,
         RepoKey,
-        # TODO temporarily disabled for branch merging XXX
-        #Blake2KeyfileKey,
-        #Blake2RepoKey,
+        Blake2KeyfileKey,
+        Blake2RepoKey,
         AuthenticatedKey,
     ))
     def key(self, request, monkeypatch):
@@ -172,10 +171,9 @@ class TestKey:
         key = KeyfileKey.detect(self.MockRepository(), self.keyfile2_cdata)
         assert key.decrypt(self.keyfile2_id, self.keyfile2_cdata) == b'payload'
 
-    @pytest.mark.skip("temporarily disabled for branch merge")  # TODO
     def test_keyfile_blake2(self, monkeypatch, keys_dir):
         with keys_dir.join('keyfile').open('w') as fd:
-            fd.write(self.keyfile_blake2_key_file)
+            fd.write(self.keyfile_blake2_key_file)  # XXX does this have a 32byte mac key?
         monkeypatch.setenv('BORG_PASSPHRASE', 'passphrase')
         key = Blake2KeyfileKey.detect(self.MockRepository(), self.keyfile_blake2_cdata)
         assert key.decrypt(self.keyfile_blake2_id, self.keyfile_blake2_cdata) == b'payload'
