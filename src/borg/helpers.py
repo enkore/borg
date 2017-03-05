@@ -2243,13 +2243,13 @@ def json_print(obj):
 
 class ResourceUsage:
     cpu = 0.0
-    network = 0.0
+    repository = 0.0
     input = 0.0
     cache_sync = 0.0
     wall_clock = 0.0
 
-    relative_attrs = ('cpu', 'network', 'input', 'cache_sync', )
-    component_attrs = ('network', 'input', 'cache_sync', )
+    relative_attrs = ('cpu', 'repository', 'input', 'cache_sync', )
+    component_attrs = ('repository', 'input', 'cache_sync', )
 
     @classmethod
     def begin(cls):
@@ -2265,14 +2265,35 @@ class ResourceUsage:
             relative_usage[attr] = getattr(cls, attr) / cls.wall_clock
         absolute_usage = {attr: getattr(cls, attr) for attr in cls.relative_attrs}
         absolute_usage['wall_clock'] = cls.wall_clock
-        logger.debug('Resource Usage (relative): {cpu:.0%} CPU, {input:.0%} input, {network:.0%} network, {cache_sync:.0%} cache sync'.format_map(relative_usage))
-        logger.debug('Resource Usage (absolute): {cpu:.2}s CPU, {input:.2}s input, {network:.2}s network, {wall_clock:.2}s wall clock, {cache_sync:.2}s cache sync'.format_map(absolute_usage))
+        logger.debug('Resource Usage (relative): {cpu:.0%} CPU, {input:.0%} input, {repository:.0%} repository, {cache_sync:.0%} cache sync'.format_map(relative_usage))
+        logger.debug('Resource Usage (absolute): {cpu:.2f}s CPU, {input:.2f}s input, {repository:.2f}s repository, {wall_clock:.2f}s wall clock, {cache_sync:.2f}s cache sync'.format_map(absolute_usage))
         bottleneck = sorted((v, k) for k, v in relative_usage.items())[-1][1]
         logger.debug('Resource Usage: bottleneck: %s', bottleneck)
 
     @classmethod
     def account(cls, attribute):
+        """
+        Account some time frame to *attribute*. Use either as context manager or function decorator::
+
+            ...
+            with ResourceUsage.account('repository'):
+                ...
+            ...
+
+            @ResourceUsage.account('repository')
+            def do_something():
+                ...
+
+        Nested use incorrectly counts the time frame multiple times.
+        """
         class context_manager:
+            def __call__(self, function):
+                @wraps(function)
+                def wrapper(*args, **kwargs):
+                    with self:
+                        return function(*args, **kwargs)
+                return wrapper
+
             def __enter__(self):
                 self.t0 = time.perf_counter()
 

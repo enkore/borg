@@ -402,7 +402,7 @@ class SleepingBandwidthLimiter:
         # Measure _only_ the network or include the ratelimiting as well?
         t0 = time.perf_counter()
         written = os.write(fd, to_send)
-        ResourceUsage.network += time.perf_counter() - t0
+        ResourceUsage.repository += time.perf_counter() - t0
         if self.ratelimit:
             self.ratelimit_quota -= written
         return written
@@ -561,7 +561,7 @@ class RemoteRepository:
             else:
                 raise Exception('Server insisted on using unsupported protocol version %s' % version)
 
-            ResourceUsage.network = 0.0  # reset network stats now, do not count server startup.
+            ResourceUsage.repository = 0.0  # reset network repository stats now, do not count server startup.
 
             def do_open():
                 self.id = self.open(path=self.location.path, create=create, lock_wait=lock_wait,
@@ -738,14 +738,14 @@ This problem will go away as soon as the server has been upgraded to 1.0.7+.
                 w_fds = []
             t0 = time.perf_counter()
             r, w, x = select.select(self.r_fds, w_fds, self.x_fds, 1)
-            ResourceUsage.network += time.perf_counter() - t0
+            ResourceUsage.repository += time.perf_counter() - t0
             if x:
                 raise Exception('FD exception occurred')
             for fd in r:
                 if fd is self.stdout_fd:
                     t0 = time.perf_counter()
                     data = os.read(fd, BUFSIZE)
-                    ResourceUsage.network += time.perf_counter() - t0
+                    ResourceUsage.repository += time.perf_counter() - t0
                     if not data:
                         raise ConnectionClosed()
                     self.rx_bytes += len(data)
@@ -772,7 +772,7 @@ This problem will go away as soon as the server has been upgraded to 1.0.7+.
                 elif fd is self.stderr_fd:
                     t0 = time.perf_counter()
                     data = os.read(fd, 32768)
-                    ResourceUsage.network += time.perf_counter() - t0
+                    ResourceUsage.repository += time.perf_counter() - t0
                     if not data:
                         raise ConnectionClosed()
                     self.rx_bytes += len(data)

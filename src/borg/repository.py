@@ -8,6 +8,7 @@ from configparser import ConfigParser
 from datetime import datetime
 from functools import partial
 from itertools import islice
+from time import perf_counter
 
 import msgpack
 
@@ -18,6 +19,7 @@ from .helpers import Location
 from .helpers import ProgressIndicatorPercent
 from .helpers import bin_to_hex
 from .helpers import yes
+from .helpers import ResourceUsage
 from .locking import Lock, LockError, LockErrorT
 from .logger import create_logger
 from .lrucache import LRUCache
@@ -140,7 +142,8 @@ class Repository:
             self.do_create = False
             self.create(self.path)
             self.created = True
-        self.open(self.path, bool(self.exclusive), lock_wait=self.lock_wait, lock=self.do_lock)
+        with ResourceUsage.account('repository'):
+            self.open(self.path, bool(self.exclusive), lock_wait=self.lock_wait, lock=self.do_lock)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -654,6 +657,7 @@ class Repository:
                 # The outcome of the DELETE has been recorded in the PUT branch already
                 self.compact[segment] += size
 
+    @ResourceUsage.account('repository')
     def check(self, repair=False, save_space=False):
         """Check repository consistency
 
@@ -765,6 +769,7 @@ class Repository:
         self.index = None
         self._active_txn = False
 
+    @ResourceUsage.account('repository')
     def rollback(self):
         self._rollback(cleanup=False)
 
@@ -778,6 +783,7 @@ class Repository:
             self.index = self.open_index(self.get_transaction_id())
         return id in self.index
 
+    @ResourceUsage.account('repository')
     def list(self, limit=None, marker=None):
         """
         list <limit> IDs starting from after id <marker> - in index (pseudo-random) order.
@@ -786,6 +792,7 @@ class Repository:
             self.index = self.open_index(self.get_transaction_id())
         return [id_ for id_, _ in islice(self.index.iteritems(marker=marker), limit)]
 
+    @ResourceUsage.account('repository')
     def scan(self, limit=None, marker=None):
         """
         list <limit> IDs starting from after id <marker> - in on-disk order, so that a client
@@ -829,6 +836,7 @@ class Repository:
                         return result
         return result
 
+    @ResourceUsage.account('repository')
     def get(self, id):
         if not self.index:
             self.index = self.open_index(self.get_transaction_id())
@@ -842,6 +850,7 @@ class Repository:
         for id_ in ids:
             yield self.get(id_)
 
+    @ResourceUsage.account('repository')
     def put(self, id, data, wait=True):
         if not self._active_txn:
             self.prepare_txn(self.get_transaction_id())
@@ -861,6 +870,7 @@ class Repository:
         self.segments[segment] += 1
         self.index[id] = segment, offset
 
+    @ResourceUsage.account('repository')
     def delete(self, id, wait=True):
         if not self._active_txn:
             self.prepare_txn(self.get_transaction_id())
