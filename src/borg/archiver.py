@@ -3447,7 +3447,6 @@ def main():  # pragma: no cover
         try:
             ResourceUsage.begin()
             exit_code = archiver.run(args)
-            ResourceUsage.end()
         except Error as e:
             msg = e.get_message()
             msgid = type(e).__qualname__
@@ -3490,6 +3489,7 @@ def main():  # pragma: no cover
             logger.error(msg, msgid=msgid)
         if tb:
             logger.log(tb_log_level, tb)
+        ResourceUsage.end()
         if args.show_rc:
             rc_logger = logging.getLogger('borg.output.show-rc')
             exit_msg = 'terminating with %s status, rc %d'
