@@ -36,6 +36,7 @@ from .helpers import bin_to_hex
 from .helpers import ellipsis_truncate, ProgressIndicatorPercent, log_multi
 from .helpers import PathPrefixPattern, FnmatchPattern
 from .helpers import CompressionDecider1, CompressionDecider2, CompressionSpec
+from .helpers import ResourceUsage
 from .item import Item, ArchiveItem
 from .key import key_factory
 from .platform import acl_get, acl_set, set_flags, get_flags, swidth
@@ -156,9 +157,10 @@ class BackupIO:
         return self
 
     def __enter__(self):
-        pass
+        self.t0 = time.perf_counter()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        ResourceUsage.input += time.perf_counter() - self.t0
         if exc_type and issubclass(exc_type, OSError):
             raise BackupOSError(self.op, exc_val) from exc_val
 

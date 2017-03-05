@@ -56,6 +56,7 @@ from .helpers import signal_handler, raising_signal_handler, SigHup, SigTerm
 from .helpers import ErrorIgnoringTextIOWrapper
 from .helpers import ProgressIndicatorPercent
 from .helpers import basic_json_data, json_print
+from .helpers import ResourceUsage
 from .item import Item
 from .key import key_creator, tam_required_file, tam_required, RepoKey, PassphraseKey
 from .keymanager import KeyManager
@@ -3444,7 +3445,9 @@ def main():  # pragma: no cover
                 print(tb, file=sys.stderr)
             sys.exit(e.exit_code)
         try:
+            ResourceUsage.begin()
             exit_code = archiver.run(args)
+            ResourceUsage.end()
         except Error as e:
             msg = e.get_message()
             msgid = type(e).__qualname__

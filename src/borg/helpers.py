@@ -11,6 +11,7 @@ import os.path
 import platform
 import pwd
 import re
+import resource
 import signal
 import socket
 import stat
@@ -2238,3 +2239,48 @@ def json_dump(obj):
 
 def json_print(obj):
     print(json_dump(obj))
+
+
+class ResourceUsage:
+    cpu = 0.0
+    network = 0.0
+    input = 0.0
+    cache_sync = 0.0
+    wall_clock = 0.0
+
+    relative_attrs = ('cpu', 'network', 'input', 'cache_sync', )
+    component_attrs = ('network', 'input', 'cache_sync', )
+
+    @classmethod
+    def begin(cls):
+        cls.monotonic_start = time.monotonic()
+        cls.cpu_zero = cls.current_cpu_time()
+
+    @classmethod
+    def end(cls):
+        cls.wall_clock = time.monotonic() - cls.monotonic_start
+        cls.cpu = cls.current_cpu_time() - cls.cpu_zero
+        relative_usage = {}
+        for attr in cls.relative_attrs:
+            relative_usage[attr] = getattr(cls, attr) / cls.wall_clock
+        absolute_usage = {attr: getattr(cls, attr) for attr in cls.relative_attrs}
+        absolute_usage['wall_clock'] = cls.wall_clock
+        logger.debug('Resource Usage (relative): {cpu:.0%} CPU, {input:.0%} input, {network:.0%} network, {cache_sync:.0%} cache sync'.format_map(relative_usage))
+        logger.debug('Resource Usage (absolute): {cpu:.2}s CPU, {input:.2}s input, {network:.2}s network, {wall_clock:.2}s wall clock, {cache_sync:.2}s cache sync'.format_map(absolute_usage))
+        bottleneck = sorted((v, k) for k, v in relative_usage.items())[-1][1]
+        logger.debug('Resource Usage: bottleneck: %s', bottleneck)
+
+    @classmethod
+    def account(cls, attribute):
+        class context_manager:
+            def __enter__(self):
+                self.t0 = time.perf_counter()
+
+            def __exit__(self, exc_type, exc_val, exc_tb):
+                duration = time.perf_counter() - self.t0
+                setattr(cls, attribute, getattr(cls, attribute) + duration)
+        return context_manager()
+
+    @staticmethod
+    def current_cpu_time():
+        return resource.getrusage(resource.RUSAGE_SELF).ru_utime

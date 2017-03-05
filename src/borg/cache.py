@@ -1,5 +1,6 @@
 import configparser
 import os
+import time
 import stat
 import shutil
 from binascii import unhexlify
@@ -20,6 +21,7 @@ from .helpers import format_file_size
 from .helpers import yes
 from .helpers import remove_surrogates
 from .helpers import ProgressIndicatorPercent, ProgressIndicatorMessage
+from .helpers import ResourceUsage
 from .item import Item, ArchiveItem, ChunkListEntry
 from .key import PlaintextKey
 from .locking import Lock
@@ -198,8 +200,9 @@ class Cache:
         try:
             self.security_manager.assert_secure(manifest, key, self)
             if sync and self.manifest.id != self.manifest_id:
-                self.sync()
-                self.commit()
+                with ResourceUsage.account('cache_sync'):
+                    self.sync()
+                    self.commit()
         except:
             self.close()
             raise
