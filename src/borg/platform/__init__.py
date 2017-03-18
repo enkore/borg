@@ -23,6 +23,7 @@ if sys.platform.startswith('linux'):  # pragma: linux only
     from .linux import set_flags, get_flags
     from .linux import SyncFile
     from .linux import swidth, umount
+    from .linux import set_python_thread_affinity
 elif sys.platform.startswith('freebsd'):  # pragma: freebsd only
     from .freebsd import API_VERSION as OS_API_VERSION
     from .freebsd import acl_get, acl_set

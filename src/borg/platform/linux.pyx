@@ -11,6 +11,7 @@ from .base import SyncFile as BaseSyncFile
 from .base import safe_fadvise
 from .posix import swidth
 
+from cpython.exc cimport PyErr_SetFromErrno
 from libc cimport errno
 from libc.stdint cimport int64_t
 
@@ -57,7 +58,15 @@ cdef extern from "sys/ioctl.h":
 cdef extern from "string.h":
     char *strerror(int errnum)
 
+cdef extern from "_linux.c":
+    int _set_python_thread_affinity "set_python_thread_affinity"()
+
 _comment_re = re.compile(' *#.*', re.M)
+
+
+def set_python_thread_affinity():
+    if not _set_python_thread_affinity():
+        print('cpuset failed')
 
 
 BSD_TO_LINUX_FLAGS = {

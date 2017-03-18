@@ -136,7 +136,7 @@ class Item(PropDict):
 
     VALID_KEYS = ITEM_KEYS | {'deleted', 'nlink', }  # str-typed keys
 
-    __slots__ = ("_dict", )  # avoid setting attributes not supported by properties
+    __slots__ = ("_dict", "num_chunks", "status", "original_path")  # avoid setting attributes not supported by properties
 
     # properties statically defined, so that IDEs can know their names:
 

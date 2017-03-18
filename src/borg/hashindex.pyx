@@ -2,11 +2,13 @@
 from collections import namedtuple
 import locale
 import os
+import sys
 
 cimport cython
 from libc.stdint cimport uint32_t, UINT32_MAX, uint64_t
 from libc.errno cimport errno
 from cpython.exc cimport PyErr_SetFromErrnoWithFilename
+from cpython.ref cimport Py_INCREF, Py_DECREF
 
 API_VERSION = '1.1_01'
 
@@ -29,6 +31,11 @@ cdef extern from "_hashindex.c":
     uint32_t _le32toh(uint32_t v)
 
     double HASH_MAX_LOAD
+
+
+cdef extern from "_utils.c":
+    object _wrap_object(object obj)
+    object _unwrap_object(object bytes)
 
 
 cdef _NoDefault = object()
@@ -54,6 +61,14 @@ assert UINT32_MAX == 2**32-1
 cdef uint32_t _MAX_VALUE = 2**32-1025
 
 assert _MAX_VALUE % 2 == 1
+
+
+def wrap_obj(object):
+    return _wrap_object(object)
+
+
+def unwrap_obj(ptr):
+    return _unwrap_object(ptr)
 
 
 @cython.internal
