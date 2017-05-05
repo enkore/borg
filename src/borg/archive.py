@@ -25,7 +25,7 @@ from .cache import ChunkListEntry
 from .crypto.key import key_factory
 from .compress import Compressor, CompressionSpec
 from .constants import *  # NOQA
-from .crypto import IntegrityError as IntegrityErrorBase
+from .crypto.low_level import IntegrityError as IntegrityErrorBase
 from .hashindex import ChunkIndex, ChunkIndexEntry
 from .helpers import Manifest
 from .helpers import hardlinkable
