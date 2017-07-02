@@ -517,8 +517,8 @@ hashindex_write(HashIndex *index, PyObject *file_py)
         }
     }
 
-    /* Note: explicitly construct view; BuildValue can convert (pointer, length) to Python objects, but copies them for doing so */
-    buckets_view = PyMemoryView_FromMemory((char*)index->buckets, buckets_length, PyBUF_READ);
+    /* XXX: PyPy has no PyMemoryView_FromMemory */
+    buckets_view = PyBytes_FromStringAndSize((char*)index->buckets, buckets_length);
     if(!buckets_view) {
         assert(PyErr_Occurred());
         return;

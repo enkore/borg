@@ -107,7 +107,7 @@ class PlatformLinuxTestCase(BaseTestCase):
         self.assert_equal(self.get_acl(self.tmpdir)['acl_access'], ACCESS_ACL)
         self.assert_equal(self.get_acl(self.tmpdir)['acl_default'], DEFAULT_ACL)
 
-    @unittest.skipIf(not user_exists('übel'), 'requires übel user')
+    @unittest.skipIf(False, 'requires übel user')  # XXX: Pypy #2598
     @unittest.skipIf(not are_acls_working(), 'ACLs do not work')
     def test_non_ascii_acl(self):
         # Testing non-ascii ACL processing to see whether our code is robust.
