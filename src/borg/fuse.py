@@ -206,7 +206,7 @@ class FuseOperations(llfuse.Operations):
     """
     # mount options
     allow_damaged_files = False
-    versions = False
+    version = None
 
     def __init__(self, key, repository, manifest, args, decrypted_repository):
         super().__init__()
@@ -244,7 +244,7 @@ class FuseOperations(llfuse.Operations):
             self.versions_index = FuseVersionsIndex()
             archive_names = (x.name for x in self.manifest.archives.list_considering(self.args))
             for archive_name in archive_names:
-                if self.versions:
+                if self.version:
                     # process archives immediately
                     self.process_archive(archive_name)
                 else:
@@ -280,7 +280,12 @@ class FuseOperations(llfuse.Operations):
             pass
         try:
             options.remove('versions')
-            self.versions = True
+            self.version = self.file_version_linear
+        except ValueError:
+            pass
+        try:
+            options.remove('all_versions')
+            self.version = self.file_version_archive
         except ValueError:
             pass
         self._create_filesystem()
@@ -314,10 +319,11 @@ class FuseOperations(llfuse.Operations):
     def process_archive(self, archive_name, prefix=[]):
         """Build FUSE inode hierarchy from archive metadata
         """
-        self.file_versions = {}  # for versions mode: original path -> version
         t0 = time.perf_counter()
         archive = Archive(self.repository_uncached, self.key, self.manifest, archive_name,
                           consider_part_files=self.args.consider_part_files)
+        file_versions = {}  # for versions mode: original path -> version
+        file_version = self.version(archive)
         for item_inode, item in self.cache.iter_archive_items(archive.metadata.items):
             path = os.fsencode(item.path)
             is_dir = stat.S_ISDIR(item.mode)
@@ -336,14 +342,15 @@ class FuseOperations(llfuse.Operations):
             parent = 1
             for segment in segments[:-1]:
                 parent = self.process_inner(segment, parent)
-            self.process_leaf(segments[-1], item, parent, prefix, is_dir, item_inode)
+            self.process_leaf(segments[-1], item, parent, prefix, is_dir, item_inode,
+                              file_version, file_versions)
         duration = time.perf_counter() - t0
         logger.debug('fuse: process_archive completed in %.1f s for archive %s', duration, archive.name)
 
-    def process_leaf(self, name, item, parent, prefix, is_dir, item_inode):
-        def file_version(item, path):
+    def file_version_linear(self, archive):
+        def file_version(item, encoded_path):
             if 'chunks' in item:
-                file_id = blake2b_128(path)
+                file_id = blake2b_128(encoded_path)
                 current_version, previous_id = self.versions_index.get(file_id, (0, None))
 
                 chunk_ids = [chunk_id for chunk_id, _, _ in item.chunks]
@@ -353,8 +360,17 @@ class FuseOperations(llfuse.Operations):
                     current_version += 1
                     self.versions_index[file_id] = current_version, contents_id
 
-                return current_version
+                return os.fsencode('.%05d' % current_version)
+        return file_version
 
+    def file_version_archive(self, archive):
+        def file_version(item, encoded_path):
+            if 'chunks' in item:
+                return encoded_name
+        encoded_name = os.fsencode(archive.name)
+        return file_version
+
+    def process_leaf(self, name, item, parent, prefix, is_dir, item_inode, file_version=None, file_versions=None):
         def make_versioned_name(name, version, add_dir=False):
             if add_dir:
                 # add intermediate directory with same name as filename
@@ -362,26 +378,25 @@ class FuseOperations(llfuse.Operations):
                 name += b'/' + path_fname[-1]
             # keep original extension at end to avoid confusing tools
             name, ext = os.path.splitext(name)
-            version_enc = os.fsencode('.%05d' % version)
-            return name + version_enc + ext
+            return name + version + ext
 
-        if self.versions and not is_dir:
+        if file_version is not None and not is_dir:
             parent = self.process_inner(name, parent)
             path = os.fsencode(item.path)
             version = file_version(item, path)
             if version is not None:
                 # regular file, with contents - maybe a hardlink master
                 name = make_versioned_name(name, version)
-                self.file_versions[path] = version
+                file_versions[path] = version
 
         path = item.path
         del item.path  # safe some space
         if 'source' in item and hardlinkable(item.mode):
             # a hardlink, no contents, <source> is the hardlink master
             source = os.fsencode(item.source)
-            if self.versions:
+            if file_version is not None:
                 # adjust source name with version
-                version = self.file_versions[source]
+                version = file_versions[source]
                 source = make_versioned_name(source, version, add_dir=True)
                 name = make_versioned_name(name, version)
             try:
